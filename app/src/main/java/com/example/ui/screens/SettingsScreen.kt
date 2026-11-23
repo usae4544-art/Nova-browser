@@ -1,0 +1,661 @@
+package com.example.ui.screens
+
+import android.Manifest
+import android.app.role.RoleManager
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.DeleteForever
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.InstallMobile
+import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.VpnLock
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
+import com.example.data.preferences.BrowserSettings
+import com.example.data.preferences.SearchEngine
+import com.example.engine.ChromiumEngineInfo
+import com.example.ui.components.BrowserBarLayoutPreview
+import com.example.ui.components.GlassPillChip
+import com.example.ui.components.LiquidGlassSurface
+import com.example.ui.theme.AppThemeMode
+import com.example.ui.theme.CoralDanger
+import com.example.ui.theme.LocalNovaGlassColors
+import com.example.vpn.VpnConnectionStatus
+import com.example.vpn.VpnRuntimeState
+import kotlin.math.roundToInt
+
+@Composable
+fun SettingsScreen(
+    settings: BrowserSettings,
+    vpnState: VpnRuntimeState,
+    chromiumInfo: ChromiumEngineInfo,
+    isIncognito: Boolean,
+    onUpdateTheme: (AppThemeMode) -> Unit,
+    onUpdateSearchEngine: (SearchEngine) -> Unit,
+    onUpdateCustomHomepage: (String) -> Unit,
+    onSetAutoDarkWebsites: (Boolean) -> Unit,
+    onSetShowTopBar: (Boolean) -> Unit,
+    onSetShowBottomBar: (Boolean) -> Unit,
+    onSetTextZoom: (Int) -> Unit,
+    onSetAdBlock: (Boolean) -> Unit,
+    onSetHttpsOnly: (Boolean) -> Unit,
+    onSetCookies: (Boolean) -> Unit,
+    onSetThirdPartyCookies: (Boolean) -> Unit,
+    onSetJavaScript: (Boolean) -> Unit,
+    onSetPopupBlocking: (Boolean) -> Unit,
+    onSetAllowCamera: (Boolean) -> Unit,
+    onSetAllowMic: (Boolean) -> Unit,
+    onSetAllowLocation: (Boolean) -> Unit,
+    onSetNotifications: (Boolean) -> Unit,
+    onSetupIncognitoPin: (String) -> Unit,
+    onDisableIncognitoPin: () -> Unit,
+    onClearAllBrowsingData: () -> Unit,
+    onOpenAdBlockDashboard: () -> Unit,
+    onOpenVpnSettings: () -> Unit,
+    onOpenDownloads: () -> Unit,
+    onShowMessage: (String) -> Unit,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var homepageInput by remember(settings.customHomepageUrl) { mutableStateOf(settings.customHomepageUrl) }
+    var showPinSetupDialog by remember { mutableStateOf(false) }
+    var showClearDataDialog by remember { mutableStateOf(false) }
+    var canInstallUnknownApps by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                runCatching { context.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
+            } else true
+        )
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                canInstallUnknownApps = runCatching { context.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val notificationPermLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        onSetNotifications(granted)
+        if (!granted) onShowMessage("Notification permission denied")
+    }
+
+    val defaultBrowserLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        onShowMessage("Default browser settings updated")
+    }
+
+    GlassOverlayScaffold(
+        title = "Settings",
+        isIncognito = isIncognito,
+        onBack = onBack
+    ) {
+        LazyColumn(
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            // 1. Appearance
+            item {
+                SettingsSectionCard(title = "Appearance", icon = Icons.Rounded.Palette) {
+                    Text(
+                        text = "Liquid Glass Theme",
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        AppThemeMode.entries.forEach { mode ->
+                            GlassPillChip(
+                                label = mode.label,
+                                active = settings.themeMode == mode,
+                                onClick = { onUpdateTheme(mode) },
+                                testTagName = "theme_${mode.name.lowercase()}"
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    BrowserBarLayoutPreview(
+                        showTopBar = settings.showTopBar,
+                        showBottomBar = settings.showBottomBar,
+                        onSetShowTopBar = onSetShowTopBar,
+                        onSetShowBottomBar = onSetShowBottomBar
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SettingsToggleRow(
+                        title = "Top Floating Address Bar",
+                        subtitle = "Show or hide the top Liquid Glass search and URL bar independently",
+                        checked = settings.showTopBar,
+                        onCheckedChange = onSetShowTopBar,
+                        switchTestTag = "settings_show_top_bar_switch"
+                    )
+                    SettingsToggleRow(
+                        title = "Bottom Floating Dock",
+                        subtitle = "Show or hide the bottom iPhone Liquid Glass bar independently (corner menu stays accessible)",
+                        checked = settings.showBottomBar,
+                        onCheckedChange = onSetShowBottomBar,
+                        switchTestTag = "settings_show_bottom_bar_switch"
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SettingsToggleRow(
+                        title = "Dark Mode on All Websites",
+                        subtitle = "Automatically darkens every website whenever System Dark Mode or Dark Theme is active",
+                        checked = settings.autoDarkWebsites,
+                        onCheckedChange = onSetAutoDarkWebsites
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Website Text Size", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            text = "${settings.textZoomPercent}%",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = LocalNovaGlassColors.current.accentStart
+                        )
+                    }
+                    Slider(
+                        value = settings.textZoomPercent.toFloat(),
+                        onValueChange = { onSetTextZoom((it / 5f).roundToInt() * 5) },
+                        valueRange = 75f..200f,
+                        steps = 24
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedTextField(
+                            value = homepageInput,
+                            onValueChange = { homepageInput = it },
+                            label = { Text("Custom Homepage URL (blank = NOVA)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(onClick = { onUpdateCustomHomepage(homepageInput) }) {
+                            Text("Save")
+                        }
+                    }
+                }
+            }
+
+            // 2. Search Engine
+            item {
+                SettingsSectionCard(title = "Search Engine", icon = Icons.Rounded.Search) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SearchEngine.entries.chunked(3).forEach { row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                row.forEach { engine ->
+                                    GlassPillChip(
+                                        label = engine.displayName,
+                                        active = settings.searchEngine == engine,
+                                        onClick = { onUpdateSearchEngine(engine) },
+                                        testTagName = "search_engine_${engine.name.lowercase()}"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Privacy & Security
+            item {
+                SettingsSectionCard(title = "Privacy & Security", icon = Icons.Rounded.Security) {
+                    SettingsToggleRow(
+                        title = "HTTPS-Only Upgrade",
+                        subtitle = "Automatically upgrade HTTP links to HTTPS",
+                        checked = settings.httpsOnlyMode,
+                        onCheckedChange = onSetHttpsOnly
+                    )
+                    SettingsToggleRow(
+                        title = "Cookies",
+                        subtitle = "Allow websites to store login sessions",
+                        checked = settings.cookiesEnabled,
+                        onCheckedChange = onSetCookies
+                    )
+                    SettingsToggleRow(
+                        title = "Third-Party Cookies",
+                        subtitle = "Disabled by default for stronger tracking protection",
+                        checked = settings.thirdPartyCookiesEnabled,
+                        onCheckedChange = onSetThirdPartyCookies
+                    )
+                    SettingsToggleRow(
+                        title = "JavaScript",
+                        subtitle = "Required by modern web apps like YouTube and Google",
+                        checked = settings.javascriptEnabled,
+                        onCheckedChange = onSetJavaScript
+                    )
+                    SettingsToggleRow(
+                        title = "Pop-up Blocker",
+                        subtitle = "Prevent unsolicited automatic pop-up windows",
+                        checked = settings.popupBlockingEnabled,
+                        onCheckedChange = onSetPopupBlocking
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                if (settings.incognitoLockEnabled) onDisableIncognitoPin()
+                                else showPinSetupDialog = true
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("incognito_pin_button")
+                        ) {
+                            Icon(Icons.Rounded.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (settings.incognitoLockEnabled) "Remove PIN" else "Lock Private Tabs")
+                        }
+                        OutlinedButton(
+                            onClick = { showClearDataDialog = true },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("clear_browsing_data_button")
+                        ) {
+                            Icon(Icons.Rounded.DeleteForever, contentDescription = null, tint = CoralDanger, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Clear Data")
+                        }
+                    }
+                }
+            }
+
+            // 4. Ad Blocker, VPN & Downloads Links
+            item {
+                SettingsSectionCard(title = "Shield, VPN & Downloads", icon = Icons.Rounded.Shield) {
+                    SettingsToggleRow(
+                        title = "Nova Ad & Tracker Blocker",
+                        subtitle = "Filter known ad networks and trackers",
+                        checked = settings.adBlockEnabled,
+                        onCheckedChange = onSetAdBlock
+                    )
+                    SettingsNavRow(
+                        icon = Icons.Rounded.Shield,
+                        title = "Ad Blocker & Custom Rules",
+                        subtitle = "Manage allowlist, custom rules, and blocked logs",
+                        onClick = onOpenAdBlockDashboard
+                    )
+                    SettingsNavRow(
+                        icon = Icons.Rounded.VpnLock,
+                        title = "VPN Settings",
+                        subtitle = when (vpnState.status) {
+                            VpnConnectionStatus.CONNECTED_LOCAL_TUN -> "Local TUN Active (${vpnState.dnsServer})"
+                            VpnConnectionStatus.ERROR -> "Error — tap to review"
+                            else -> "Disconnected · Configure Android VpnService"
+                        },
+                        onClick = onOpenVpnSettings
+                    )
+                    SettingsNavRow(
+                        icon = Icons.Rounded.Download,
+                        title = "Download Manager",
+                        subtitle = "Manage active, paused, and completed files",
+                        onClick = onOpenDownloads
+                    )
+                    SettingsNavRow(
+                        icon = Icons.Rounded.InstallMobile,
+                        title = "Install Unknown Apps (APK Sources)",
+                        subtitle = if (canInstallUnknownApps) {
+                            "Allowed · Direct APK installation enabled"
+                        } else {
+                            "Not allowed yet · Tap to enable in Android Settings"
+                        },
+                        onClick = {
+                            runCatching {
+                                val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    Intent(
+                                        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                        Uri.parse("package:${context.packageName}")
+                                    )
+                                } else {
+                                    Intent(Settings.ACTION_SECURITY_SETTINGS)
+                                }
+                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                context.startActivity(intent)
+                            }.onFailure {
+                                onShowMessage("Unable to open Install Unknown Apps settings.")
+                            }
+                        }
+                    )
+                }
+            }
+
+            // 5. Website Permissions & Notifications
+            item {
+                SettingsSectionCard(title = "Website Permissions & Notifications", icon = Icons.Rounded.Notifications) {
+                    SettingsToggleRow(
+                        title = "Camera Access Prompt",
+                        subtitle = "Allow websites to request camera permission",
+                        checked = settings.allowCameraSites,
+                        onCheckedChange = onSetAllowCamera
+                    )
+                    SettingsToggleRow(
+                        title = "Microphone Access Prompt",
+                        subtitle = "Allow websites to request microphone permission",
+                        checked = settings.allowMicSites,
+                        onCheckedChange = onSetAllowMic
+                    )
+                    SettingsToggleRow(
+                        title = "Location Access Prompt",
+                        subtitle = "Allow websites to request approximate location",
+                        checked = settings.allowLocationSites,
+                        onCheckedChange = onSetAllowLocation
+                    )
+                    SettingsToggleRow(
+                        title = "Browser Notifications",
+                        subtitle = "Allow download and browser status alerts",
+                        checked = settings.notificationsEnabled,
+                        onCheckedChange = { enable ->
+                            if (enable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                notificationPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            } else {
+                                onSetNotifications(enable)
+                            }
+                        }
+                    )
+                }
+            }
+
+            // 6. Default Browser & About NOVA
+            item {
+                SettingsSectionCard(title = "Default Browser & About", icon = Icons.Rounded.Info) {
+                    SettingsNavRow(
+                        icon = Icons.Rounded.Language,
+                        title = "Set as Default Browser",
+                        subtitle = "Open Android Default Browser selector",
+                        onClick = {
+                            runCatching {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    val roleManager = context.getSystemService(RoleManager::class.java)
+                                    if (roleManager != null && roleManager.isRoleAvailable(RoleManager.ROLE_BROWSER) &&
+                                        !roleManager.isRoleHeld(RoleManager.ROLE_BROWSER)
+                                    ) {
+                                        defaultBrowserLauncher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_BROWSER))
+                                        return@SettingsNavRow
+                                    }
+                                }
+                                context.startActivity(
+                                    Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }.onFailure {
+                                onShowMessage("Unable to open default browser settings on this device.")
+                            }
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Nova Browser v1.0",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Text(
+                        text = "Engine: ${chromiumInfo.engineName}\nPackage: ${chromiumInfo.packageName}\nChromium WebView Version: ${chromiumInfo.versionName}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = LocalNovaGlassColors.current.accentStart,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = chromiumInfo.limitationsNote,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+
+    if (showPinSetupDialog) {
+        var pin by remember { mutableStateOf("") }
+        var confirmPin by remember { mutableStateOf("") }
+        var error by remember { mutableStateOf<String?>(null) }
+
+        AlertDialog(
+            onDismissRequest = { showPinSetupDialog = false },
+            title = { Text("Set Private Tab PIN") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Your PIN is stored using salted iterative SHA-256 hashing and never saved in plaintext.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = pin,
+                        onValueChange = { if (it.length <= 8) pin = it.filter(Char::isDigit) },
+                        label = { Text("Enter PIN (4–8 digits)") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = confirmPin,
+                        onValueChange = { if (it.length <= 8) confirmPin = it.filter(Char::isDigit) },
+                        label = { Text("Confirm PIN") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        singleLine = true
+                    )
+                    if (error != null) {
+                        Text(error!!, color = CoralDanger, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        when {
+                            pin.length < 4 -> error = "PIN must be at least 4 digits."
+                            pin != confirmPin -> error = "PINs do not match."
+                            else -> {
+                                onSetupIncognitoPin(pin)
+                                showPinSetupDialog = false
+                            }
+                        }
+                    }
+                ) {
+                    Text("Enable Lock")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPinSetupDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (showClearDataDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearDataDialog = false },
+            title = { Text("Clear All Browsing Data?") },
+            text = { Text("Removes browsing history, WebView cache, site cookies, and WebStorage.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onClearAllBrowsingData()
+                        showClearDataDialog = false
+                    }
+                ) {
+                    Text("Clear Now")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearDataDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun SettingsSectionCard(
+    title: String,
+    icon: ImageVector,
+    content: @Composable () -> Unit
+) {
+    LiquidGlassSurface(
+        shape = RoundedCornerShape(22.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = LocalNovaGlassColors.current.accentStart,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SettingsToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    switchTestTag: String? = null
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp)
+        ) {
+            Text(text = title, style = MaterialTheme.typography.titleSmall)
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = if (switchTestTag != null) Modifier.testTag(switchTestTag) else Modifier
+        )
+    }
+}
+
+@Composable
+private fun SettingsNavRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = LocalNovaGlassColors.current.accentStart,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, style = MaterialTheme.typography.titleSmall)
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Icon(
+            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}

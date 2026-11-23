@@ -1,0 +1,962 @@
+package com.example.viewmodel
+
+import android.app.Application
+import android.net.Uri
+import android.view.View
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.example.data.local.AdBlockRuleEntity
+import com.example.data.local.BookmarkEntity
+import com.example.data.local.DownloadEntity
+import com.example.data.local.HistoryEntity
+import com.example.data.local.NovaDatabase
+import com.example.data.local.QuickNoteEntity
+import com.example.data.local.ShortcutEntity
+import com.example.data.preferences.BrowserPreferences
+import com.example.data.preferences.BrowserSettings
+import com.example.data.preferences.SearchEngine
+import com.example.data.repository.BrowserRepository
+import com.example.downloads.NovaDownloadManager
+import com.example.downloads.OpenFileOutcome
+import com.example.engine.AdBlockEngine
+import com.example.engine.AdBlockStats
+import com.example.engine.ChromiumEngineInfo
+import com.example.engine.PageSecurityState
+import com.example.engine.SecurityUtils
+import com.example.engine.SiteCertificateSummary
+import com.example.engine.TabWebEventCallbacks
+import com.example.engine.TabWebViewManager
+import com.example.engine.UrlResolver
+import com.example.engine.WebAppInstaller
+import com.example.ui.theme.AppThemeMode
+import com.example.vpn.NovaVpnService
+import com.example.vpn.VpnRuntimeState
+import com.example.vpn.VpnStateHolder
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+class BrowserViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val database = NovaDatabase.getInstance(application)
+    private val preferences = BrowserPreferences(application)
+    val repository = BrowserRepository(database, preferences)
+    val adBlockEngine = AdBlockEngine()
+    val downloadManager = NovaDownloadManager(application, repository)
+    val webViewManager = TabWebViewManager(application, adBlockEngine)
+    val chromiumInfo: ChromiumEngineInfo = UrlResolver.detectChromiumWebViewInfo(application)
+
+    val settings: StateFlow<BrowserSettings> = repository.settings.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = BrowserSettings()
+    )
+
+    val bookmarks: StateFlow<List<BookmarkEntity>> = repository.bookmarks.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val history: StateFlow<List<HistoryEntity>> = repository.history.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val downloads: StateFlow<List<DownloadEntity>> = repository.downloads.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val quickNotes: StateFlow<List<QuickNoteEntity>> = repository.quickNotes.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val adBlockRules: StateFlow<List<AdBlockRuleEntity>> = repository.adBlockRules.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val shortcuts: StateFlow<List<ShortcutEntity>> = repository.shortcuts.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = NovaDatabase.defaultShortcuts
+    )
+
+    val adBlockStats: StateFlow<AdBlockStats> = adBlockEngine.stats
+    val vpnState: StateFlow<VpnRuntimeState> = VpnStateHolder.state
+    val completedDownloads: SharedFlow<DownloadEntity> = downloadManager.completedDownloads
+
+    private val initialTab = BrowserTab()
+    private val _tabs = MutableStateFlow(listOf(initialTab))
+    val tabs: StateFlow<List<BrowserTab>> = _tabs.asStateFlow()
+
+    private val _activeTabId = MutableStateFlow(initialTab.id)
+    val activeTabId: StateFlow<String> = _activeTabId.asStateFlow()
+
+    private val _tabVisitHistory = MutableStateFlow<List<String>>(emptyList())
+    val hasPreviousTabInHistory: StateFlow<Boolean> = combine(_tabVisitHistory, _tabs) { stack, currentTabs ->
+        val validIds = currentTabs.map { it.id }.toSet()
+        stack.any { it in validIds && it != _activeTabId.value }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = false
+    )
+
+    val activeTab: StateFlow<BrowserTab> = combine(_tabs, _activeTabId) { list, id ->
+        list.firstOrNull { it.id == id } ?: list.firstOrNull() ?: BrowserTab()
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = initialTab
+    )
+
+    private val _activeOverlay = MutableStateFlow<BrowserOverlay>(BrowserOverlay.None)
+    val activeOverlay: StateFlow<BrowserOverlay> = _activeOverlay.asStateFlow()
+
+    private val _isFullscreenMode = MutableStateFlow(false)
+    val isFullscreenMode: StateFlow<Boolean> = _isFullscreenMode.asStateFlow()
+
+    private val _findInPage = MutableStateFlow(FindInPageState())
+    val findInPage: StateFlow<FindInPageState> = _findInPage.asStateFlow()
+
+    private val _sslWarning = MutableStateFlow<SslWarningRequest?>(null)
+    val sslWarning: StateFlow<SslWarningRequest?> = _sslWarning.asStateFlow()
+
+    private val _sitePermissionPrompt = MutableStateFlow<SitePermissionPrompt?>(null)
+    val sitePermissionPrompt: StateFlow<SitePermissionPrompt?> = _sitePermissionPrompt.asStateFlow()
+
+    private val _readingArticle = MutableStateFlow(ReadingArticle())
+    val readingArticle: StateFlow<ReadingArticle> = _readingArticle.asStateFlow()
+
+    private val _incognitoUnlocked = MutableStateFlow(false)
+    val incognitoUnlocked: StateFlow<Boolean> = _incognitoUnlocked.asStateFlow()
+
+    private val _incognitoPinChallenge = MutableStateFlow<IncognitoPinChallenge?>(null)
+    val incognitoPinChallenge: StateFlow<IncognitoPinChallenge?> = _incognitoPinChallenge.asStateFlow()
+
+    private val _fullscreenVideoView = MutableStateFlow<View?>(null)
+    val fullscreenVideoView: StateFlow<View?> = _fullscreenVideoView.asStateFlow()
+    private var fullscreenVideoCallback: WebChromeClient.CustomViewCallback? = null
+
+    private val _pendingFileChooser = MutableStateFlow<Pair<ValueCallback<Array<Uri>>, Array<String>>?>(null)
+    val pendingFileChooser: StateFlow<Pair<ValueCallback<Array<Uri>>, Array<String>>?> = _pendingFileChooser.asStateFlow()
+
+    private val _barsHiddenByScroll = MutableStateFlow(false)
+    val barsHiddenByScroll: StateFlow<Boolean> = _barsHiddenByScroll.asStateFlow()
+
+    private val _pendingUnknownSourcesInstall = MutableStateFlow<DownloadEntity?>(null)
+    val pendingUnknownSourcesInstall: StateFlow<DownloadEntity?> = _pendingUnknownSourcesInstall.asStateFlow()
+
+    private val _snackbarMessages = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val snackbarMessages: SharedFlow<String> = _snackbarMessages.asSharedFlow()
+
+    private var lastNavigationSignature: String = ""
+    private var lastNavigationTimeMs: Long = 0L
+
+    init {
+        viewModelScope.launch {
+            repository.ensureDefaultShortcuts()
+        }
+
+        // Sync settings & rules into AdBlockEngine and WebView pool continuously
+        viewModelScope.launch {
+            combine(repository.settings, repository.adBlockRules) { s, rules -> s to rules }
+                .collect { (s, rules) ->
+                    adBlockEngine.updateConfig(
+                        adBlockOn = s.adBlockEnabled,
+                        trackerBlockOn = s.trackerBlockEnabled,
+                        rules = rules
+                    )
+                    webViewManager.updateGlobalSettings(s)
+                }
+        }
+
+        webViewManager.attachCallbacks(
+            TabWebEventCallbacks(
+                onPageStarted = { tabId, url ->
+                    updateTab(tabId) { tab ->
+                        tab.copy(
+                            url = url,
+                            isLoading = true,
+                            progress = 12,
+                            networkErrorMessage = null,
+                            securityState = SecurityUtils.classifyUrlSecurity(url)
+                        )
+                    }
+                },
+                onPageFinished = { tabId, url, title, canBack, canForward ->
+                    val current = _tabs.value.firstOrNull { it.id == tabId }
+                    updateTab(tabId) { tab ->
+                        tab.copy(
+                            url = url,
+                            title = title.ifBlank { UrlResolver.displayHostOrTitle(url, tab.title) },
+                            isLoading = false,
+                            progress = 100,
+                            canGoBack = canBack,
+                            canGoForward = canForward,
+                            securityState = SecurityUtils.classifyUrlSecurity(url),
+                            lastUpdatedAt = System.currentTimeMillis()
+                        )
+                    }
+                    if (current != null && !current.isIncognito && url != UrlResolver.NOVA_HOME_URL) {
+                        viewModelScope.launch {
+                            repository.recordHistory(title.ifBlank { url }, url)
+                        }
+                    }
+                },
+                onProgressChanged = { tabId, progress ->
+                    updateTab(tabId) { tab ->
+                        tab.copy(
+                            progress = progress,
+                            isLoading = progress in 1..99
+                        )
+                    }
+                },
+                onTitleChanged = { tabId, title ->
+                    updateTab(tabId) { it.copy(title = title) }
+                },
+                onNavigationStateChanged = { tabId, url, canBack, canForward ->
+                    updateTab(tabId) { tab ->
+                        tab.copy(
+                            url = if (url.isNotBlank()) url else tab.url,
+                            canGoBack = canBack,
+                            canGoForward = canForward,
+                            securityState = SecurityUtils.classifyUrlSecurity(url.ifBlank { tab.url })
+                        )
+                    }
+                },
+                onNetworkError = { tabId, failingUrl, description ->
+                    updateTab(tabId) { tab ->
+                        tab.copy(
+                            isLoading = false,
+                            progress = 0,
+                            url = failingUrl.ifBlank { tab.url },
+                            networkErrorMessage = description
+                        )
+                    }
+                },
+                onSslError = { tabId, host, primaryError, handler ->
+                    updateTab(tabId) {
+                        it.copy(securityState = PageSecurityState.CERT_ERROR, isLoading = false)
+                    }
+                    _sslWarning.value = SslWarningRequest(tabId, host, primaryError, handler)
+                },
+                onDownloadRequested = { url, userAgent, contentDisposition, mimeType ->
+                    startFileDownload(url, userAgent, contentDisposition, mimeType)
+                },
+                onOpenNewTabUrl = { url, isIncognito ->
+                    openNewTab(
+                        isIncognito = isIncognito,
+                        initialUrl = url,
+                        parentTabId = _activeTabId.value
+                    )
+                },
+                onFullscreenVideoShow = { view, callback ->
+                    fullscreenVideoCallback?.onCustomViewHidden()
+                    fullscreenVideoCallback = callback
+                    _fullscreenVideoView.value = view
+                },
+                onFullscreenVideoHide = {
+                    _fullscreenVideoView.value = null
+                    fullscreenVideoCallback?.onCustomViewHidden()
+                    fullscreenVideoCallback = null
+                },
+                onFileChooserRequested = { callback, acceptTypes ->
+                    _pendingFileChooser.value?.first?.onReceiveValue(null)
+                    _pendingFileChooser.value = callback to acceptTypes
+                },
+                onSitePermissionRequested = { origin, resources, request ->
+                    _sitePermissionPrompt.value = SitePermissionPrompt.WebMedia(origin, resources, request)
+                },
+                onGeolocationRequested = { origin, callback ->
+                    _sitePermissionPrompt.value = SitePermissionPrompt.Geolocation(origin, callback)
+                },
+                onFindMatchesUpdated = { activeOrdinal, totalMatches ->
+                    _findInPage.update {
+                        it.copy(
+                            activeMatchIndex = if (totalMatches > 0) activeOrdinal + 1 else 0,
+                            totalMatches = totalMatches
+                        )
+                    }
+                },
+                onExternalIntentError = { message ->
+                    emitMessage(message)
+                },
+                onScrollDirectionChanged = { hideBars ->
+                    if (!activeTab.value.isHome) {
+                        _barsHiddenByScroll.value = hideBars
+                    } else {
+                        _barsHiddenByScroll.value = false
+                    }
+                }
+            )
+        )
+    }
+
+    fun updateEffectiveWebsiteDarkMode(enabled: Boolean) {
+        webViewManager.updateWebsiteDarkMode(enabled)
+    }
+
+    fun revealFloatingBars() {
+        _barsHiddenByScroll.value = false
+    }
+
+    fun onActivityResume() {
+        webViewManager.onActivityResume()
+    }
+
+    fun onActivityPause() {
+        webViewManager.onActivityPause()
+    }
+
+    fun getActiveSiteCertificateSummary(): SiteCertificateSummary {
+        val tab = activeTab.value
+        return webViewManager.getCertificateSummary(tab.id, tab.url)
+    }
+
+    fun emitMessage(message: String) {
+        _snackbarMessages.tryEmit(message)
+    }
+
+    fun openOverlay(overlay: BrowserOverlay) {
+        _activeOverlay.value = overlay
+    }
+
+    fun closeOverlay() {
+        _activeOverlay.value = BrowserOverlay.None
+    }
+
+    /**
+     * Immediately navigates the active tab to a URL or Search query.
+     * Prevents accidental duplicate triggers within 250ms for identical inputs.
+     */
+    fun navigateActiveTab(rawInput: String) {
+        val currentSettings = settings.value
+        val resolved = UrlResolver.resolveInput(
+            rawInput = rawInput,
+            searchEngine = currentSettings.searchEngine,
+            httpsOnlyMode = currentSettings.httpsOnlyMode
+        )
+        val tab = activeTab.value
+        val signature = "${tab.id}:$resolved"
+        val now = System.currentTimeMillis()
+        if (signature == lastNavigationSignature && (now - lastNavigationTimeMs) < 250L) {
+            return
+        }
+        lastNavigationSignature = signature
+        lastNavigationTimeMs = now
+
+        _activeOverlay.value = BrowserOverlay.None
+        _findInPage.value = FindInPageState()
+        _barsHiddenByScroll.value = false
+
+        if (resolved == UrlResolver.NOVA_HOME_URL) {
+            goHome()
+            return
+        }
+
+        SecurityUtils.detectSuspiciousUrlWarning(resolved)?.let { warning ->
+            emitMessage(warning)
+        }
+
+        updateTab(tab.id) {
+            it.copy(
+                url = resolved,
+                title = UrlResolver.displayHostOrTitle(resolved, it.title),
+                isLoading = true,
+                progress = 10,
+                networkErrorMessage = null,
+                securityState = SecurityUtils.classifyUrlSecurity(resolved)
+            )
+        }
+        webViewManager.loadUrl(tab.id, resolved)
+    }
+
+    fun navigateFromExternalIntent(url: String) {
+        if (url.isBlank()) return
+        val current = activeTab.value
+        if (current.isHome) {
+            navigateActiveTab(url)
+        } else {
+            openNewTab(isIncognito = false, initialUrl = url)
+        }
+    }
+
+    /**
+     * Deterministic Site-First Back Logic:
+     * 1. First goes back inside the active website (skipping redirect loops & about:blank).
+     * 2. If at the first page of a child tab opened from another tab, closes child tab & returns to parent tab.
+     * 3. If currently on a website in a root tab, returns cleanly to NOVA Home.
+     * 4. If already on NOVA Home and user came from another open tab, switches back to that previous tab.
+     * Returns true if back navigation was consumed, false if system should exit app.
+     */
+    fun handleSystemBack(): Boolean {
+        val tab = activeTab.value
+
+        // Step 1: Go back inside current website first!
+        if (!tab.isHome) {
+            val result = webViewManager.goBackSmart(tab.id)
+            if (result.handled) {
+                updateTab(tab.id) { current ->
+                    val nextUrl = result.targetUrl.ifBlank { current.url }
+                    current.copy(
+                        url = nextUrl,
+                        title = result.targetTitle.ifBlank { UrlResolver.displayHostOrTitle(nextUrl, current.title) },
+                        canGoBack = result.canGoBackAfter,
+                        canGoForward = result.canGoForwardAfter,
+                        networkErrorMessage = null,
+                        securityState = SecurityUtils.classifyUrlSecurity(nextUrl)
+                    )
+                }
+                return true
+            }
+
+            // Step 2: If this tab was spawned from a parent tab (e.g., link opened in new tab), return to parent tab
+            val parentId = tab.parentTabId
+            if (parentId != null && _tabs.value.any { it.id == parentId }) {
+                closeTab(tab.id)
+                _activeTabId.value = parentId
+                return true
+            }
+
+            // Step 3: Otherwise return to NOVA Home instead of exiting the browser
+            goHome(forceNovaHome = true)
+            return true
+        }
+
+        // Step 4: Already on NOVA Home — if there is a previous open tab in visit history, return to it
+        val validIds = _tabs.value.map { it.id }.toSet()
+        val cleanedHistory = _tabVisitHistory.value.filter { it in validIds && it != tab.id }
+        val previousTabId = cleanedHistory.lastOrNull()
+        if (previousTabId != null) {
+            _tabVisitHistory.value = cleanedHistory.dropLast(1)
+            _activeTabId.value = previousTabId
+            return true
+        }
+
+        return false
+    }
+
+    fun goBack() {
+        handleSystemBack()
+    }
+
+    fun goForward() {
+        val tab = activeTab.value
+        if (!tab.isHome) {
+            webViewManager.goForward(tab.id)
+        }
+    }
+
+    fun reloadOrStop() {
+        val tab = activeTab.value
+        if (tab.isHome) return
+        if (tab.isLoading) {
+            webViewManager.stopLoading(tab.id)
+            updateTab(tab.id) { it.copy(isLoading = false, progress = 0) }
+        } else {
+            updateTab(tab.id) { it.copy(networkErrorMessage = null, isLoading = true, progress = 15) }
+            val existingWv = webViewManager.getExistingWebView(tab.id)
+            if (existingWv != null && !existingWv.url.isNullOrBlank()) {
+                webViewManager.reload(tab.id)
+            } else {
+                webViewManager.loadUrl(tab.id, tab.url)
+            }
+        }
+    }
+
+    fun goHome(forceNovaHome: Boolean = false) {
+        val tab = activeTab.value
+        _activeOverlay.value = BrowserOverlay.None
+        _findInPage.value = FindInPageState()
+        _barsHiddenByScroll.value = false
+        val customHome = settings.value.customHomepageUrl.trim()
+        if (!forceNovaHome && customHome.isNotEmpty() && !tab.isHome && !customHome.equals(tab.url, ignoreCase = true)) {
+            navigateActiveTab(customHome)
+            return
+        }
+        webViewManager.stopLoading(tab.id)
+        webViewManager.markHomeAnchor(tab.id)
+        updateTab(tab.id) {
+            it.copy(
+                url = UrlResolver.NOVA_HOME_URL,
+                title = if (it.isIncognito) "Private Home" else "NOVA Home",
+                isLoading = false,
+                progress = 0,
+                canGoBack = false,
+                canGoForward = false,
+                networkErrorMessage = null,
+                securityState = PageSecurityState.NOVA_HOME
+            )
+        }
+    }
+
+    fun openNewTab(
+        isIncognito: Boolean = false,
+        initialUrl: String = UrlResolver.NOVA_HOME_URL,
+        parentTabId: String? = null
+    ) {
+        if (isIncognito && settings.value.incognitoLockEnabled && !_incognitoUnlocked.value) {
+            _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.OPEN_INCOGNITO_TAB)
+            return
+        }
+        val previousId = _activeTabId.value
+        val resolved = if (initialUrl == UrlResolver.NOVA_HOME_URL) {
+            UrlResolver.NOVA_HOME_URL
+        } else {
+            UrlResolver.resolveInput(initialUrl, settings.value.searchEngine, settings.value.httpsOnlyMode)
+        }
+        val newTab = BrowserTab(
+            parentTabId = parentTabId,
+            title = if (resolved == UrlResolver.NOVA_HOME_URL) {
+                if (isIncognito) "Private Home" else "NOVA Home"
+            } else {
+                UrlResolver.displayHostOrTitle(resolved, "Loading...")
+            },
+            url = resolved,
+            isIncognito = isIncognito,
+            isLoading = resolved != UrlResolver.NOVA_HOME_URL,
+            progress = if (resolved != UrlResolver.NOVA_HOME_URL) 10 else 0,
+            securityState = SecurityUtils.classifyUrlSecurity(resolved)
+        )
+        _tabVisitHistory.update { (it.filterNot { id -> id == previousId } + previousId).takeLast(12) }
+        _tabs.update { it + newTab }
+        _activeTabId.value = newTab.id
+        _activeOverlay.value = BrowserOverlay.None
+        _findInPage.value = FindInPageState()
+        _barsHiddenByScroll.value = false
+    }
+
+    fun selectTab(tabId: String) {
+        val target = _tabs.value.firstOrNull { it.id == tabId } ?: return
+        if (target.isIncognito && settings.value.incognitoLockEnabled && !_incognitoUnlocked.value) {
+            _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.UNLOCK_INCOGNITO_TABS)
+            return
+        }
+        val previousId = _activeTabId.value
+        if (previousId != tabId) {
+            _tabVisitHistory.update { (it.filterNot { id -> id == previousId } + previousId).takeLast(12) }
+        }
+        _activeTabId.value = tabId
+        _activeOverlay.value = BrowserOverlay.None
+        _findInPage.value = FindInPageState()
+        _barsHiddenByScroll.value = false
+    }
+
+    fun closeTab(tabId: String) {
+        val currentList = _tabs.value
+        val index = currentList.indexOfFirst { it.id == tabId }
+        if (index < 0) return
+
+        webViewManager.destroyTab(tabId)
+        val remaining = currentList.filterNot { it.id == tabId }
+        if (remaining.isEmpty()) {
+            val fresh = BrowserTab()
+            _tabs.value = listOf(fresh)
+            _activeTabId.value = fresh.id
+            _incognitoUnlocked.value = false
+        } else {
+            _tabs.value = remaining
+            if (_activeTabId.value == tabId) {
+                val nextIndex = (index - 1).coerceAtLeast(0).coerceAtMost(remaining.lastIndex)
+                _activeTabId.value = remaining[nextIndex].id
+            }
+            if (remaining.none { it.isIncognito }) {
+                _incognitoUnlocked.value = false
+            }
+        }
+    }
+
+    fun closeAllTabs(incognitoOnly: Boolean) {
+        val toClose = _tabs.value.filter { it.isIncognito == incognitoOnly }
+        toClose.forEach { webViewManager.destroyTab(it.id) }
+        val remaining = _tabs.value.filterNot { it.isIncognito == incognitoOnly }
+        if (incognitoOnly) {
+            _incognitoUnlocked.value = false
+            webViewManager.clearIncognitoSessionArtifacts()
+        }
+        if (remaining.isEmpty()) {
+            val fresh = BrowserTab()
+            _tabs.value = listOf(fresh)
+            _activeTabId.value = fresh.id
+        } else {
+            _tabs.value = remaining
+            if (remaining.none { it.id == _activeTabId.value }) {
+                _activeTabId.value = remaining.first().id
+            }
+        }
+    }
+
+    fun toggleDesktopMode() {
+        val tab = activeTab.value
+        val next = !tab.desktopMode
+        updateTab(tab.id) { it.copy(desktopMode = next) }
+        webViewManager.setDesktopMode(tab.id, next)
+        emitMessage(if (next) "Desktop site enabled" else "Mobile site enabled")
+    }
+
+    fun toggleFullscreenMode() {
+        _isFullscreenMode.update { !it }
+    }
+
+    fun exitFullscreenVideo() {
+        _fullscreenVideoView.value = null
+        fullscreenVideoCallback?.onCustomViewHidden()
+        fullscreenVideoCallback = null
+    }
+
+    // Find in Page
+    fun openFindInPage() {
+        _activeOverlay.value = BrowserOverlay.None
+        _findInPage.value = FindInPageState(isActive = true)
+    }
+
+    fun updateFindQuery(query: String) {
+        _findInPage.update { it.copy(query = query) }
+        webViewManager.findInPage(activeTab.value.id, query)
+    }
+
+    fun findNextMatch(forward: Boolean) {
+        webViewManager.findNext(activeTab.value.id, forward)
+    }
+
+    fun closeFindInPage() {
+        webViewManager.clearFindMatches(activeTab.value.id)
+        _findInPage.value = FindInPageState()
+    }
+
+    // Reading Mode
+    fun openReadingMode() {
+        val tab = activeTab.value
+        if (tab.isHome) {
+            emitMessage("Open a webpage first to use Reading Mode.")
+            return
+        }
+        _activeOverlay.value = BrowserOverlay.ReadingMode
+        _readingArticle.value = ReadingArticle(isLoading = true, title = tab.title)
+        webViewManager.extractReadableArticle(tab.id) { title, byline, paragraphs ->
+            _readingArticle.value = ReadingArticle(
+                isLoading = false,
+                title = title,
+                byline = byline,
+                paragraphs = paragraphs
+            )
+        }
+    }
+
+    // Translate current webpage
+    fun translateCurrentPage() {
+        val tab = activeTab.value
+        if (tab.isHome) {
+            emitMessage("Open a webpage first to translate it.")
+            return
+        }
+        val translateUrl = UrlResolver.buildTranslateUrl(tab.url)
+        navigateActiveTab(translateUrl)
+        emitMessage("Opening translated page...")
+    }
+
+    // Bookmarks & History & Shortcuts & Notes
+    fun toggleCurrentBookmark() {
+        val tab = activeTab.value
+        if (tab.isHome) {
+            emitMessage("Navigate to a website to bookmark it.")
+            return
+        }
+        viewModelScope.launch {
+            val added = repository.toggleBookmark(tab.title, tab.url)
+            emitMessage(if (added) "Saved to Bookmarks" else "Removed from Bookmarks")
+        }
+    }
+
+    fun deleteBookmark(id: Long) = viewModelScope.launch { repository.deleteBookmark(id) }
+
+    fun deleteHistoryItem(id: Long) = viewModelScope.launch { repository.deleteHistoryItem(id) }
+
+    fun clearAllBrowsingData() = viewModelScope.launch {
+        repository.clearHistory()
+        webViewManager.clearAllBrowsingData()
+        adBlockEngine.resetStats()
+        emitMessage("History, cache, and site cookies cleared")
+    }
+
+    fun addShortcut(title: String, rawUrl: String, accentHex: String = "#38BDF8") {
+        val resolved = UrlResolver.resolveInput(rawUrl, settings.value.searchEngine, settings.value.httpsOnlyMode)
+        viewModelScope.launch {
+            repository.addShortcut(title.ifBlank { UrlResolver.displayHostOrTitle(resolved, "Site") }, resolved, accentHex)
+            emitMessage("Shortcut added")
+        }
+    }
+
+    fun deleteShortcut(id: Long) = viewModelScope.launch { repository.deleteShortcut(id) }
+
+    fun saveQuickNote(id: Long = 0L, title: String, content: String, sourceUrl: String = "") {
+        viewModelScope.launch {
+            repository.saveQuickNote(
+                QuickNoteEntity(
+                    id = id,
+                    title = title.trim().ifBlank { "Untitled Note" },
+                    content = content.trim(),
+                    sourceUrl = sourceUrl.trim(),
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            emitMessage("Note saved")
+        }
+    }
+
+    fun deleteQuickNote(id: Long) = viewModelScope.launch { repository.deleteQuickNote(id) }
+
+    // Downloads
+    fun startFileDownload(
+        url: String,
+        userAgent: String? = null,
+        contentDisposition: String? = null,
+        mimeType: String? = null
+    ) {
+        downloadManager.startDownload(
+            url = url,
+            userAgent = userAgent,
+            contentDisposition = contentDisposition,
+            mimeType = mimeType,
+            refererUrl = activeTab.value.url
+        ) { fileName ->
+            emitMessage("Downloading $fileName")
+        }
+    }
+
+    fun pauseDownload(id: Long) = downloadManager.pauseDownload(id)
+    fun resumeDownload(id: Long) = downloadManager.resumeDownload(id)
+    fun retryDownload(id: Long) = downloadManager.retryDownload(id)
+    fun deleteDownload(id: Long) = downloadManager.deleteDownload(id)
+
+    fun openDownloadedFile(item: DownloadEntity) {
+        when (val outcome = downloadManager.openDownloadedFile(item)) {
+            OpenFileOutcome.Opened -> Unit
+            is OpenFileOutcome.NeedsUnknownSourcesPermission -> {
+                _pendingUnknownSourcesInstall.value = outcome.item
+            }
+            is OpenFileOutcome.Error -> emitMessage(outcome.message)
+        }
+    }
+
+    fun dismissUnknownSourcesPrompt() {
+        _pendingUnknownSourcesInstall.value = null
+    }
+
+    fun resumePendingApkInstallAfterSettings() {
+        val pending = _pendingUnknownSourcesInstall.value ?: return
+        _pendingUnknownSourcesInstall.value = null
+        if (downloadManager.canInstallUnknownApps()) {
+            openDownloadedFile(pending)
+        } else {
+            emitMessage("Enable 'Allow from this source' in Settings to install ${pending.fileName}")
+        }
+    }
+
+    fun shareDownloadedFile(item: DownloadEntity) {
+        val res = downloadManager.shareDownloadedFile(item)
+        res.onFailure { emitMessage(it.localizedMessage ?: "Unable to share file") }
+    }
+
+    fun burnIncognitoSession() {
+        closeAllTabs(incognitoOnly = true)
+        emitMessage("Private session burned & cookies wiped")
+    }
+
+    fun installSiteAsWebApp(title: String, url: String) {
+        val result = WebAppInstaller.installWebsiteToHomeScreen(getApplication(), title, url)
+        result.onSuccess { pinned ->
+            if (pinned) {
+                emitMessage("Installing '$title' to Home Screen...")
+            } else {
+                addShortcut(title, url)
+                emitMessage("Launcher pin unavailable — added '$title' to NOVA Quick Launch")
+            }
+        }.onFailure { err ->
+            emitMessage(err.localizedMessage ?: "Unable to install website")
+        }
+    }
+
+    // Ad Blocker
+    fun setAdBlockEnabled(enabled: Boolean) = viewModelScope.launch {
+        repository.setAdBlockEnabled(enabled)
+        emitMessage(if (enabled) "Nova Ad Shield enabled" else "Nova Ad Shield paused")
+    }
+
+    fun setTrackerBlockEnabled(enabled: Boolean) = viewModelScope.launch {
+        repository.setTrackerBlockEnabled(enabled)
+    }
+
+    fun toggleCurrentSiteAllowlist() {
+        val host = UrlResolver.extractHost(activeTab.value.url).removePrefix("www.")
+        if (host.isBlank()) return
+        viewModelScope.launch {
+            if (adBlockEngine.isHostAllowlisted(host)) {
+                repository.removeAllowlistHost(host)
+                emitMessage("Shield re-enabled on $host")
+            } else {
+                repository.addAdBlockRule(host, isAllowlist = true)
+                emitMessage("Allowlisted $host")
+            }
+        }
+    }
+
+    fun addAdBlockRule(pattern: String, isAllowlist: Boolean) = viewModelScope.launch {
+        repository.addAdBlockRule(pattern, isAllowlist)
+    }
+
+    fun toggleAdBlockRule(id: Long, enabled: Boolean) = viewModelScope.launch {
+        repository.setAdBlockRuleEnabled(id, enabled)
+    }
+
+    fun deleteAdBlockRule(id: Long) = viewModelScope.launch {
+        repository.deleteAdBlockRule(id)
+    }
+
+    // SSL Warning resolution
+    fun cancelSslConnection() {
+        _sslWarning.value?.handler?.cancel()
+        _sslWarning.value = null
+        emitMessage("Blocked untrusted HTTPS certificate")
+    }
+
+    fun proceedUnsafeSslConnection() {
+        _sslWarning.value?.handler?.proceed()
+        _sslWarning.value = null
+        emitMessage("Proceeding with unverified certificate")
+    }
+
+    // Site Permission Prompt resolution
+    fun resolveSitePermission(granted: Boolean) {
+        when (val prompt = _sitePermissionPrompt.value) {
+            is SitePermissionPrompt.WebMedia -> {
+                if (granted) prompt.request.grant(prompt.resources) else prompt.request.deny()
+            }
+            is SitePermissionPrompt.Geolocation -> {
+                prompt.callback.invoke(prompt.origin, granted, false)
+            }
+            null -> Unit
+        }
+        _sitePermissionPrompt.value = null
+    }
+
+    // File chooser resolution
+    fun completeFileChooser(uris: List<Uri>?) {
+        val pending = _pendingFileChooser.value ?: return
+        pending.first.onReceiveValue(uris?.toTypedArray())
+        _pendingFileChooser.value = null
+    }
+
+    // Incognito PIN Vault
+    fun requestUnlockIncognitoSection() {
+        if (!settings.value.incognitoLockEnabled || _incognitoUnlocked.value) return
+        _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.UNLOCK_INCOGNITO_TABS)
+    }
+
+    fun submitIncognitoPin(pin: String) {
+        val s = settings.value
+        val challenge = _incognitoPinChallenge.value ?: return
+        if (SecurityUtils.verifyPin(pin, s.incognitoPinHash, s.incognitoPinSalt)) {
+            _incognitoUnlocked.value = true
+            _incognitoPinChallenge.value = null
+            if (challenge.purpose == IncognitoVaultPurpose.OPEN_INCOGNITO_TAB) {
+                openNewTab(isIncognito = true)
+            }
+            emitMessage("Private Vault unlocked")
+        } else {
+            _incognitoPinChallenge.value = challenge.copy(errorMessage = "Incorrect PIN. Try again.")
+        }
+    }
+
+    fun dismissIncognitoPinChallenge() {
+        _incognitoPinChallenge.value = null
+    }
+
+    fun setupIncognitoPin(pin: String) {
+        if (pin.length < 4) {
+            emitMessage("PIN must be at least 4 digits")
+            return
+        }
+        viewModelScope.launch {
+            val salt = SecurityUtils.generateSalt()
+            val hash = SecurityUtils.hashPin(pin, salt)
+            repository.setIncognitoPin(hash, salt)
+            _incognitoUnlocked.value = true
+            emitMessage("Private tab PIN lock enabled")
+        }
+    }
+
+    fun disableIncognitoPin() = viewModelScope.launch {
+        repository.clearIncognitoPin()
+        _incognitoUnlocked.value = true
+        emitMessage("Private tab PIN lock disabled")
+    }
+
+    // VPN Controls
+    fun startVpnConnection() {
+        val s = settings.value
+        NovaVpnService.startConnect(getApplication(), s.vpnDnsServer, s.vpnGatewayAddress)
+    }
+
+    fun stopVpnConnection() {
+        NovaVpnService.startDisconnect(getApplication())
+    }
+
+    // Settings updates
+    fun updateThemeMode(mode: AppThemeMode) = viewModelScope.launch { repository.updateThemeMode(mode) }
+    fun updateSearchEngine(engine: SearchEngine) = viewModelScope.launch { repository.updateSearchEngine(engine) }
+    fun updateCustomHomepage(url: String) = viewModelScope.launch {
+        repository.updateCustomHomepage(url)
+        emitMessage(if (url.isBlank()) "Homepage reset to NOVA Liquid Glass" else "Custom homepage saved")
+    }
+    fun setHttpsOnlyMode(enabled: Boolean) = viewModelScope.launch { repository.setHttpsOnlyMode(enabled) }
+    fun setCookiesEnabled(enabled: Boolean) = viewModelScope.launch { repository.setCookiesEnabled(enabled) }
+    fun setThirdPartyCookiesEnabled(enabled: Boolean) = viewModelScope.launch { repository.setThirdPartyCookiesEnabled(enabled) }
+    fun setJavaScriptEnabled(enabled: Boolean) = viewModelScope.launch { repository.setJavaScriptEnabled(enabled) }
+    fun setPopupBlockingEnabled(enabled: Boolean) = viewModelScope.launch { repository.setPopupBlockingEnabled(enabled) }
+    fun setAutoDarkWebsites(enabled: Boolean) = viewModelScope.launch { repository.setAutoDarkWebsites(enabled) }
+    fun setShowTopBar(enabled: Boolean) = viewModelScope.launch {
+        repository.setShowTopBar(enabled)
+        _barsHiddenByScroll.value = false
+    }
+    fun setShowBottomBar(enabled: Boolean) = viewModelScope.launch {
+        repository.setShowBottomBar(enabled)
+        _barsHiddenByScroll.value = false
+    }
+    fun setTextZoomPercent(zoom: Int) = viewModelScope.launch { repository.setTextZoomPercent(zoom) }
+    fun setAllowCameraSites(enabled: Boolean) = viewModelScope.launch { repository.setAllowCameraSites(enabled) }
+    fun setAllowMicSites(enabled: Boolean) = viewModelScope.launch { repository.setAllowMicSites(enabled) }
+    fun setAllowLocationSites(enabled: Boolean) = viewModelScope.launch { repository.setAllowLocationSites(enabled) }
+    fun setNotificationsEnabled(enabled: Boolean) = viewModelScope.launch { repository.setNotificationsEnabled(enabled) }
+    fun setVpnDnsServer(dns: String) = viewModelScope.launch { repository.setVpnDnsServer(dns) }
+    fun setVpnGatewayAddress(address: String) = viewModelScope.launch { repository.setVpnGatewayAddress(address) }
+
+    private fun updateTab(tabId: String, transform: (BrowserTab) -> BrowserTab) {
+        _tabs.update { list ->
+            list.map { if (it.id == tabId) transform(it) else it }
+        }
+    }
+
+    override fun onCleared() {
+        webViewManager.destroyAll()
+        super.onCleared()
+    }
+}

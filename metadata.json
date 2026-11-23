@@ -1,0 +1,6 @@
+{
+  "name": "Nova Browser",
+  "description": "A futuristic Liquid Glass Android web browser powered by Chromium-based Android WebView with multi-tab management, ad & tracker blocking, download manager, incognito vault, VPN tunnel configuration, QR scanner, reading mode, and quick notes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
