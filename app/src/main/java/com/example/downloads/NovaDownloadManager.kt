@@ -78,11 +78,11 @@ class NovaDownloadManager(
         scope.launch {
             val cleanUrl = url.trim()
             if (cleanUrl.startsWith("data:", ignoreCase = true)) {
-                handleDataUriDownload(cleanUrl, onStarted)
+                handleDataUriDownload(cleanUrl, onStarted = onStarted)
                 return@launch
             }
             if (cleanUrl.startsWith("blob:", ignoreCase = true)) {
-                onStarted("Blob downloads are not supported directly")
+                onStarted("Resolving blob download...")
                 return@launch
             }
             if (!cleanUrl.startsWith("http://", ignoreCase = true) &&
@@ -108,6 +108,22 @@ class NovaDownloadManager(
             val id = repository.insertDownload(entity)
             onStarted(targetFile.name)
             launchDownloadJob(id, resume = false, userAgent = userAgent, refererUrl = refererUrl)
+        }
+    }
+
+    fun saveBase64OrBlobDownload(
+        payload: String,
+        suggestedFileName: String? = null,
+        suggestedMime: String? = null,
+        onStarted: (String) -> Unit = {}
+    ) {
+        scope.launch {
+            handleDataUriDownload(
+                dataUrl = payload,
+                explicitFileName = suggestedFileName,
+                explicitMime = suggestedMime,
+                onStarted = onStarted
+            )
         }
     }
 
@@ -271,15 +287,33 @@ class NovaDownloadManager(
         NovaNotificationHelper.showDownloadNotification(context, fileName)
     }
 
-    private suspend fun handleDataUriDownload(dataUrl: String, onStarted: (String) -> Unit) {
+    private suspend fun handleDataUriDownload(
+        dataUrl: String,
+        explicitFileName: String? = null,
+        explicitMime: String? = null,
+        onStarted: (String) -> Unit
+    ) {
         try {
-            val header = dataUrl.substringAfter("data:", "").substringBefore(",", "")
-            val payload = dataUrl.substringAfter(",", "")
-            val mime = header.substringBefore(";").ifBlank { "application/octet-stream" }
-            val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime) ?: "bin"
-            val targetFile = uniqueTargetFile(getDownloadsDirectory(), "nova_file_${System.currentTimeMillis()}.$ext")
-            val bytes = if (header.contains(";base64", ignoreCase = true)) {
-                Base64.decode(payload, Base64.DEFAULT)
+            val hasDataPrefix = dataUrl.startsWith("data:", ignoreCase = true)
+            val header = if (hasDataPrefix) dataUrl.substringAfter("data:", "").substringBefore(",", "") else ""
+            val payload = if (hasDataPrefix) dataUrl.substringAfter(",", "") else dataUrl
+            val mime = explicitMime?.ifBlank { null }
+                ?: header.substringBefore(";").ifBlank { null }
+                ?: "application/octet-stream"
+            val ext = explicitFileName?.substringAfterLast('.', "")?.ifBlank { null }
+                ?: MimeTypeMap.getSingleton().getExtensionFromMimeType(mime)
+                ?: resolveExtensionFromMime(mime)
+                ?: "bin"
+            val rawBase = explicitFileName?.substringBeforeLast('.')?.replace(Regex("[^a-zA-Z0-9._-]"), "_")?.ifBlank { null }
+                ?: "nova_file_${System.currentTimeMillis()}"
+            val targetName = if (explicitFileName != null && explicitFileName.contains(".")) {
+                explicitFileName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            } else {
+                "$rawBase.$ext"
+            }
+            val targetFile = uniqueTargetFile(getDownloadsDirectory(), targetName)
+            val bytes = if (!hasDataPrefix || header.contains(";base64", ignoreCase = true)) {
+                Base64.decode(payload.trim(), Base64.DEFAULT)
             } else {
                 Uri.decode(payload).toByteArray(Charsets.UTF_8)
             }
@@ -287,7 +321,7 @@ class NovaDownloadManager(
             mirrorToPublicDownloads(targetFile, mime)
             val entity = DownloadEntity(
                 fileName = targetFile.name,
-                url = "data:$mime",
+                url = if (hasDataPrefix) "data:$mime" else "blob:completed",
                 filePath = targetFile.absolutePath,
                 mimeType = mime,
                 totalBytes = bytes.size.toLong(),
@@ -295,6 +329,7 @@ class NovaDownloadManager(
                 status = DownloadStatus.COMPLETED.name
             )
             val id = repository.insertDownload(entity)
+            showDownloadCompletedNotification(targetFile.name)
             onStarted(targetFile.name)
             _completedDownloads.tryEmit(entity.copy(id = id))
         } catch (_: Exception) {
@@ -491,18 +526,35 @@ class NovaDownloadManager(
         }
     }
 
+    private fun extractFileNameFromContentDisposition(cd: String?): String? {
+        if (cd.isNullOrBlank()) return null
+        val starMatch = Regex("""filename\*\s*=\s*([^\'\s]+)\'\'([^;\s]+)""", RegexOption.IGNORE_CASE).find(cd)
+        if (starMatch != null) {
+            val encoded = starMatch.groupValues[2]
+            val decoded = runCatching { Uri.decode(encoded) }.getOrNull()
+            if (!decoded.isNullOrBlank()) return decoded.substringAfterLast('/').substringAfterLast('\\')
+        }
+        val plainMatch = Regex("""filename\s*=\s*"?([^";]+)"?""", RegexOption.IGNORE_CASE).find(cd)
+        if (plainMatch != null) {
+            val name = plainMatch.groupValues[1].trim()
+            if (name.isNotBlank()) return name.substringAfterLast('/').substringAfterLast('\\')
+        }
+        return null
+    }
+
     private fun buildCleanFileName(url: String, contentDisposition: String?, mimeType: String): String {
-        val guessed = URLUtil.guessFileName(url, contentDisposition, mimeType)
-            .replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val fromDisposition = extractFileNameFromContentDisposition(contentDisposition)
+        val guessed = fromDisposition ?: URLUtil.guessFileName(url, contentDisposition, mimeType)
+        val sanitized = guessed.replace(Regex("[^a-zA-Z0-9._-]"), "_")
             .ifBlank { "nova_download_${System.currentTimeMillis()}" }
 
         // Ensure APK URLs keep .apk extension even when server returns generic mime
         if (url.substringBefore("?").endsWith(".apk", ignoreCase = true) &&
-            !guessed.endsWith(".apk", ignoreCase = true)
+            !sanitized.endsWith(".apk", ignoreCase = true)
         ) {
-            return guessed.substringBeforeLast(".") + ".apk"
+            return sanitized.substringBeforeLast(".") + ".apk"
         }
-        return guessed
+        return sanitized
     }
 
     private fun resolveBestMimeType(url: String, providedMime: String?, contentDisposition: String?): String {
@@ -565,8 +617,36 @@ class NovaDownloadManager(
             "xls" to "application/vnd.ms-excel",
             "xlsx" to "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "ppt" to "application/vnd.ms-powerpoint",
-            "pptx" to "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            "pptx" to "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "tar" to "application/x-tar",
+            "gz" to "application/gzip",
+            "bz2" to "application/x-bzip2",
+            "xz" to "application/x-xz",
+            "iso" to "application/x-iso9660-image",
+            "dmg" to "application/x-apple-diskimage",
+            "exe" to "application/x-msdownload",
+            "msi" to "application/x-msi",
+            "bin" to "application/octet-stream",
+            "epub" to "application/epub+zip",
+            "torrent" to "application/x-bittorrent",
+            "flac" to "audio/flac",
+            "aac" to "audio/aac",
+            "avi" to "video/x-msvideo",
+            "mov" to "video/quicktime",
+            "flv" to "video/x-flv",
+            "3gp" to "video/3gpp",
+            "bmp" to "image/bmp",
+            "ico" to "image/x-icon",
+            "rtf" to "application/rtf"
         )
+
+        fun resolveExtensionFromMime(mime: String): String? {
+            val cleanMime = mime.substringBefore(";").trim().lowercase()
+            for ((ext, m) in explicitMimeMap) {
+                if (m.equals(cleanMime, ignoreCase = true)) return ext
+            }
+            return null
+        }
 
         fun resolveMimeFromFileName(fileNameOrUrl: String): String? {
             val clean = fileNameOrUrl.substringBefore("?").substringBefore("#")

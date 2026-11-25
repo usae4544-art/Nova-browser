@@ -39,6 +39,8 @@ sealed interface BrowserOverlay {
     data object QuickNotes : BrowserOverlay
     data object QrScanner : BrowserOverlay
     data object ReadingMode : BrowserOverlay
+    data object Reviews : BrowserOverlay
+    data object UserAccount : BrowserOverlay
 }
 
 data class FindInPageState(

@@ -76,6 +76,7 @@ import com.example.ui.screens.LiveDownloadFloatingCard
 import com.example.ui.screens.QrScannerScreen
 import com.example.ui.screens.QuickNotesScreen
 import com.example.ui.screens.ReadingModeScreen
+import com.example.ui.screens.ReviewsScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.SitePermissionDialog
 import com.example.ui.screens.SiteSecurityInspectorDialog
@@ -83,6 +84,7 @@ import com.example.ui.screens.SplashOverlay
 import com.example.ui.screens.SslWarningDialog
 import com.example.ui.screens.TabSwitcherScreen
 import com.example.ui.screens.UnknownSourcesPermissionDialog
+import com.example.ui.screens.UserAccountDialog
 import com.example.ui.screens.VpnSettingsScreen
 import com.example.ui.theme.NovaBrowserTheme
 import com.example.ui.theme.resolveEffectiveDarkTheme
@@ -168,6 +170,9 @@ fun NovaBrowserApp(
     val adBlockRules by viewModel.adBlockRules.collectAsStateWithLifecycle()
     val shortcuts by viewModel.shortcuts.collectAsStateWithLifecycle()
     val siteNotificationRules by viewModel.siteNotificationRules.collectAsStateWithLifecycle()
+    val reviews by viewModel.reviews.collectAsStateWithLifecycle()
+    val ownReview by viewModel.ownReview.collectAsStateWithLifecycle()
+    val userAccount by viewModel.userAccount.collectAsStateWithLifecycle()
     val adBlockStats by viewModel.adBlockStats.collectAsStateWithLifecycle()
     val vpnState by viewModel.vpnState.collectAsStateWithLifecycle()
     val vpnPublicIp by viewModel.vpnPublicIp.collectAsStateWithLifecycle()
@@ -194,6 +199,7 @@ fun NovaBrowserApp(
     var showSplash by remember { mutableStateOf(true) }
     var showInstallWebAppDialog by remember { mutableStateOf(false) }
     var showSiteSecurityDialog by remember { mutableStateOf(false) }
+    var showUserAccountDialog by remember { mutableStateOf(false) }
 
     // Trigger system Fingerprint / BiometricPrompt whenever requested by Private Vault
     LaunchedEffect(biometricPromptNonce) {
@@ -353,6 +359,7 @@ fun NovaBrowserApp(
                     isIncognitoVaultLocked ||
                     showSiteSecurityDialog ||
                     showInstallWebAppDialog ||
+                    showUserAccountDialog ||
                     sslWarning != null ||
                     sitePermissionPrompt != null ||
                     incognitoPinChallenge != null ||
@@ -373,6 +380,8 @@ fun NovaBrowserApp(
                 onOpenHistory = { viewModel.openOverlay(BrowserOverlay.History) },
                 onOpenNotes = { viewModel.openOverlay(BrowserOverlay.QuickNotes) },
                 onOpenQrScanner = { viewModel.openOverlay(BrowserOverlay.QrScanner) },
+                onOpenReviews = { viewModel.openOverlay(BrowserOverlay.Reviews) },
+                onOpenAccount = { showUserAccountDialog = true },
                 onOpenIncognitoTab = { viewModel.openNewTab(isIncognito = true) },
                 onBurnIncognitoSession = viewModel::burnIncognitoSession,
                 onAddShortcut = { title, url -> viewModel.addShortcut(title, url) },
@@ -520,7 +529,10 @@ fun NovaBrowserApp(
                                 }
                             },
                             onOpenQrScanner = { viewModel.openOverlay(BrowserOverlay.QrScanner) },
-                            onOpenSettings = { viewModel.openOverlay(BrowserOverlay.Settings) }
+                            onOpenSettings = { viewModel.openOverlay(BrowserOverlay.Settings) },
+                            userAccount = userAccount,
+                            onOpenReviews = { viewModel.openOverlay(BrowserOverlay.Reviews) },
+                            onOpenAccount = { showUserAccountDialog = true }
                         )
                     }
                     BrowserOverlay.Bookmarks -> {
@@ -710,7 +722,35 @@ fun NovaBrowserApp(
                             onBack = viewModel::closeOverlay
                         )
                     }
+                    BrowserOverlay.Reviews -> {
+                        ReviewsScreen(
+                            reviews = reviews,
+                            ownReview = ownReview,
+                            userAccount = userAccount,
+                            isIncognito = activeTab.isIncognito,
+                            onSubmitReview = viewModel::submitOwnReview,
+                            onLikeReview = viewModel::likeReview,
+                            onDeleteReview = viewModel::deleteReview,
+                            onOpenAccount = { showUserAccountDialog = true },
+                            onBack = viewModel::closeOverlay
+                        )
+                    }
+                    BrowserOverlay.UserAccount -> {
+                        showUserAccountDialog = true
+                        viewModel.closeOverlay()
+                    }
                 }
+            }
+
+            // User Account Dialog
+            if (showUserAccountDialog) {
+                UserAccountDialog(
+                    currentAccount = userAccount,
+                    onDismiss = { showUserAccountDialog = false },
+                    onLogin = viewModel::loginOrRegisterAccount,
+                    onLogout = viewModel::logoutAccount,
+                    onUpdateProfile = viewModel::updateAccountProfile
+                )
             }
 
             // Animated Liquid Glass Live Download Card with Progress & Direct Jump to Downloads

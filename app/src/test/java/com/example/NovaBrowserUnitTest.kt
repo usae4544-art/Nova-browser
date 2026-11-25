@@ -4,12 +4,15 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import com.example.data.local.AdBlockRuleEntity
 import com.example.data.local.NovaDatabase
+import com.example.data.local.ReviewEntity
+import com.example.data.local.UserAccountEntity
 import com.example.data.preferences.SearchEngine
 import com.example.downloads.NovaDownloadManager
 import com.example.engine.AdBlockEngine
 import com.example.engine.GitHubUpdateChecker
 import com.example.engine.PageSecurityState
 import com.example.engine.SecurityUtils
+import com.example.engine.TabWebViewManager
 import com.example.engine.UrlResolver
 import com.example.notifications.NovaNotificationSound
 import com.example.ui.components.SakugaPalette
@@ -343,5 +346,70 @@ class NovaBrowserUnitTest {
         assertTrue(parsed.releaseNotes.contains("\"Liquid Glass\" polish"))
         assertNull(GitHubUpdateChecker.parseLatestReleaseJson(releaseJson, "1.0.3"))
         assertNull(GitHubUpdateChecker.parseLatestReleaseJson("{broken json", "1.0.2"))
+    }
+
+    @Test
+    fun `review entity and user account models initialize with valid defaults`() {
+        val review = ReviewEntity(
+            authorId = "user_123",
+            authorName = "Nova Fan",
+            rating = 5,
+            comment = "Liquid glass UI is smooth!"
+        )
+        assertEquals(5, review.rating)
+        assertEquals("Nova Fan", review.authorName)
+        assertFalse(review.isOwnReview)
+        assertEquals(0, review.likesCount)
+
+        val account = UserAccountEntity(
+            userId = "usr_007",
+            username = "james_bond",
+            email = "agent@mi6.gov",
+            displayName = "James",
+            avatarColorHex = "#8B5CF6"
+        )
+        assertTrue(account.isLoggedIn)
+        assertEquals("james_bond", account.username)
+        assertEquals("#8B5CF6", account.avatarColorHex)
+    }
+
+    @Test
+    fun `comprehensive download manager resolves MIME types and extensions for all formats`() {
+        assertEquals("application/x-tar", NovaDownloadManager.resolveMimeFromFileName("archive.tar"))
+        assertEquals("application/gzip", NovaDownloadManager.resolveMimeFromFileName("backup.tar.gz"))
+        assertEquals("application/vnd.rar", NovaDownloadManager.resolveMimeFromFileName("files.rar"))
+        assertEquals("application/x-7z-compressed", NovaDownloadManager.resolveMimeFromFileName("pack.7z"))
+        assertEquals("application/x-iso9660-image", NovaDownloadManager.resolveMimeFromFileName("os_installer.iso"))
+        assertEquals("application/epub+zip", NovaDownloadManager.resolveMimeFromFileName("book.epub"))
+        assertEquals("application/x-bittorrent", NovaDownloadManager.resolveMimeFromFileName("distro.torrent"))
+        assertEquals("application/vnd.android.package-archive", NovaDownloadManager.resolveMimeFromFileName("app.apk"))
+        assertEquals("video/mp4", NovaDownloadManager.resolveMimeFromFileName("clip.mp4"))
+        assertEquals("audio/flac", NovaDownloadManager.resolveMimeFromFileName("song.flac"))
+
+        assertEquals("apk", NovaDownloadManager.resolveExtensionFromMime("application/vnd.android.package-archive"))
+        assertEquals("pdf", NovaDownloadManager.resolveExtensionFromMime("application/pdf"))
+        assertEquals("zip", NovaDownloadManager.resolveExtensionFromMime("application/zip"))
+
+        assertTrue(TabWebViewManager.DOWNLOADABLE_EXTENSIONS.contains(".apk"))
+        assertTrue(TabWebViewManager.DOWNLOADABLE_EXTENSIONS.contains(".zip"))
+        assertTrue(TabWebViewManager.DOWNLOADABLE_EXTENSIONS.contains(".pdf"))
+        assertTrue(TabWebViewManager.DOWNLOADABLE_EXTENSIONS.contains(".tar"))
+        assertTrue(TabWebViewManager.DOWNLOADABLE_EXTENSIONS.contains(".mp4"))
+    }
+
+    @Test
+    fun `sakuga VFX controller spawns typewriter ink accents and bottom tap waves`() {
+        val controller = SakugaVfxController()
+
+        controller.triggerTypewriterKeyAccent(Offset(180f, 600f))
+        assertTrue(controller.hasActiveEffects)
+
+        controller.triggerBottomTapWave(Offset(200f, 950f))
+        assertTrue(controller.hasActiveEffects)
+
+        repeat(50) {
+            controller.step(0.03f)
+        }
+        assertFalse(controller.hasActiveEffects)
     }
 }

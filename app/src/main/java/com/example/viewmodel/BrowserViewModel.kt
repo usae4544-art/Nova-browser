@@ -13,8 +13,10 @@ import com.example.data.local.DownloadEntity
 import com.example.data.local.HistoryEntity
 import com.example.data.local.NovaDatabase
 import com.example.data.local.QuickNoteEntity
+import com.example.data.local.ReviewEntity
 import com.example.data.local.ShortcutEntity
 import com.example.data.local.SiteNotificationRuleEntity
+import com.example.data.local.UserAccountEntity
 import com.example.data.preferences.BrowserPreferences
 import com.example.data.preferences.BrowserSettings
 import com.example.data.preferences.SearchEngine
@@ -120,6 +122,24 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             started = SharingStarted.Eagerly,
             initialValue = emptyList()
         )
+
+    val reviews: StateFlow<List<ReviewEntity>> = repository.reviews.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = NovaDatabase.defaultReviews
+    )
+
+    val ownReview: StateFlow<ReviewEntity?> = repository.ownReview.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = null
+    )
+
+    val userAccount: StateFlow<UserAccountEntity?> = repository.activeAccount.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = null
+    )
 
     val adBlockStats: StateFlow<AdBlockStats> = adBlockEngine.stats
     val vpnState: StateFlow<VpnRuntimeState> = VpnStateHolder.state
@@ -248,6 +268,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     init {
         viewModelScope.launch {
             repository.ensureDefaultShortcuts()
+            repository.ensureDefaultReviews()
         }
 
         // Automatically open Package Installer once an in-app GitHub APK update finishes downloading
@@ -471,6 +492,14 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                         val clean = host.trim().lowercase().removePrefix("www.")
                         siteNotificationRules.value.firstOrNull { it.host == clean }?.allowed
                     }
+                },
+                onBlobDownloadReady = { dataUrl, filename, mime ->
+                    downloadManager.saveBase64OrBlobDownload(
+                        payload = dataUrl,
+                        suggestedFileName = filename.ifBlank { null },
+                        suggestedMime = mime.ifBlank { null },
+                        onStarted = { name -> emitMessage("Downloaded $name") }
+                    )
                 }
             )
         )
@@ -1415,8 +1444,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 @Suppress("DEPRECATION")
                 ctx.packageManager.getPackageInfo(ctx.packageName, 0)
             }
-            info.versionName ?: "1.0.2"
-        }.getOrDefault("1.0.2")
+            info.versionName ?: "1.0.3"
+        }.getOrDefault("1.0.3")
     }
 
     fun checkForAppUpdates(silent: Boolean = false) {
@@ -1506,6 +1535,62 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     private fun updateTab(tabId: String, transform: (BrowserTab) -> BrowserTab) {
         _tabs.update { list ->
             list.map { if (it.id == tabId) transform(it) else it }
+        }
+    }
+
+    fun submitOwnReview(rating: Int, comment: String) {
+        viewModelScope.launch {
+            val account = userAccount.value
+            val authorName = account?.displayName ?: account?.username ?: "Nova User"
+            val authorAvatarHex = account?.avatarColorHex ?: "#8B5CF6"
+            val authorId = account?.userId ?: "device_user"
+            repository.addOrUpdateOwnReview(
+                rating = rating,
+                comment = comment,
+                authorName = authorName,
+                authorAvatarHex = authorAvatarHex,
+                authorId = authorId
+            )
+            emitMessage("Review submitted! Thank you.")
+        }
+    }
+
+    fun likeReview(id: Long) {
+        viewModelScope.launch {
+            repository.likeReview(id)
+        }
+    }
+
+    fun deleteReview(id: Long) {
+        viewModelScope.launch {
+            repository.deleteReview(id)
+            emitMessage("Review deleted")
+        }
+    }
+
+    fun loginOrRegisterAccount(
+        email: String,
+        username: String,
+        displayName: String,
+        avatarColorHex: String = "#8B5CF6"
+    ) {
+        viewModelScope.launch {
+            val acc = repository.loginOrRegisterAccount(email, username, displayName, avatarColorHex)
+            emitMessage("Logged in as ${acc.displayName}")
+        }
+    }
+
+    fun logoutAccount() {
+        viewModelScope.launch {
+            repository.logoutAccount()
+            emitMessage("Signed out of Nova Account")
+        }
+    }
+
+    fun updateAccountProfile(displayName: String, bio: String, avatarColorHex: String) {
+        viewModelScope.launch {
+            repository.updateAccountProfile(displayName, bio, avatarColorHex)
+            emitMessage("Profile updated")
         }
     }
 

@@ -810,6 +810,83 @@ class SakugaVfxController(
         )
     }
 
+    /**
+     * Sakuga Typewriter / Writing Key VFX:
+     * Emits sharp upward mechanical ink strikes (TicksParticle),
+     * sparkling glints (KiraParticle), and gentle cursive ink puffs (PuffParticle)
+     * at the caret or key position when user types or inputs text.
+     */
+    fun triggerTypewriterKeyAccent(rootCenter: Offset) {
+        if (reducedMotion) return
+        val c = toLocal(rootCenter)
+        addParticle(
+            TicksParticle(
+                x = c.x,
+                y = c.y - 12f,
+                count = 4,
+                radiusDp = 6f,
+                lengthDp = 10f,
+                dir = (-PI / 2f).toFloat(),
+                fan = 0.65f,
+                life = 0.36f
+            )
+        )
+        addParticle(
+            KiraParticle(
+                x = c.x + rndF(-12f, 12f),
+                y = c.y - 16f,
+                radiusDp = 7.5f,
+                life = 0.44f
+            )
+        )
+        spawnPuff(
+            x = c.x,
+            y = c.y - 8f,
+            n = 2,
+            sizeDp = 5.5f,
+            vxDp = rndF(-14f, 14f),
+            vyDp = -18f,
+            life = 0.48f
+        )
+    }
+
+    /**
+     * Interactive Bottom Dock & Bar Tap VFX:
+     * Produces expanding liquid meniscus shockwave and two-tone Sakuga sparks
+     * whenever the user taps navigation buttons or capsules at the bottom.
+     */
+    fun triggerBottomTapWave(rootCenter: Offset) {
+        if (reducedMotion) return
+        val c = toLocal(rootCenter)
+        addParticle(
+            BurstRingParticle(
+                cx = c.x,
+                cy = c.y,
+                rxDp = 32f,
+                ryDp = 12f,
+                widthDp = 3.6f,
+                life = 0.40f
+            )
+        )
+        addParticle(
+            KiraParticle(
+                x = c.x - 16f,
+                y = c.y - 10f,
+                radiusDp = 8.5f,
+                life = 0.46f
+            )
+        )
+        addParticle(
+            KiraParticle(
+                x = c.x + 16f,
+                y = c.y - 10f,
+                radiusDp = 8.5f,
+                life = 0.46f
+            )
+        )
+        spawnShards(c.x, c.y - 4f, count = 5, speedDp = 140f, sizeDp = 4f, life = 0.52f)
+    }
+
     private fun spawnPuff(
         x: Float,
         y: Float,

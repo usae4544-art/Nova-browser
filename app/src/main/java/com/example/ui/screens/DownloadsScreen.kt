@@ -131,13 +131,46 @@ fun DownloadsScreen(
             "MEDIA" -> downloads.filter {
                 it.mimeType.startsWith("image/") ||
                     it.mimeType.startsWith("video/") ||
-                    it.mimeType.startsWith("audio/")
+                    it.mimeType.startsWith("audio/") ||
+                    it.fileName.endsWith(".mp4", ignoreCase = true) ||
+                    it.fileName.endsWith(".mkv", ignoreCase = true) ||
+                    it.fileName.endsWith(".webm", ignoreCase = true) ||
+                    it.fileName.endsWith(".mp3", ignoreCase = true) ||
+                    it.fileName.endsWith(".wav", ignoreCase = true) ||
+                    it.fileName.endsWith(".m4a", ignoreCase = true) ||
+                    it.fileName.endsWith(".jpg", ignoreCase = true) ||
+                    it.fileName.endsWith(".jpeg", ignoreCase = true) ||
+                    it.fileName.endsWith(".png", ignoreCase = true) ||
+                    it.fileName.endsWith(".webp", ignoreCase = true)
             }
             "DOCS" -> downloads.filter {
                 it.mimeType.contains("pdf") ||
-                    it.mimeType.contains("zip") ||
                     it.mimeType.contains("document") ||
-                    it.mimeType.startsWith("text/")
+                    it.mimeType.contains("word") ||
+                    it.mimeType.contains("sheet") ||
+                    it.mimeType.contains("excel") ||
+                    it.mimeType.contains("presentation") ||
+                    it.mimeType.startsWith("text/") ||
+                    it.fileName.endsWith(".pdf", ignoreCase = true) ||
+                    it.fileName.endsWith(".doc", ignoreCase = true) ||
+                    it.fileName.endsWith(".docx", ignoreCase = true) ||
+                    it.fileName.endsWith(".xls", ignoreCase = true) ||
+                    it.fileName.endsWith(".xlsx", ignoreCase = true) ||
+                    it.fileName.endsWith(".txt", ignoreCase = true) ||
+                    it.fileName.endsWith(".epub", ignoreCase = true)
+            }
+            "ZIP" -> downloads.filter {
+                it.mimeType.contains("zip") ||
+                    it.mimeType.contains("rar") ||
+                    it.mimeType.contains("tar") ||
+                    it.mimeType.contains("7z") ||
+                    it.mimeType.contains("compressed") ||
+                    it.fileName.endsWith(".zip", ignoreCase = true) ||
+                    it.fileName.endsWith(".rar", ignoreCase = true) ||
+                    it.fileName.endsWith(".7z", ignoreCase = true) ||
+                    it.fileName.endsWith(".tar", ignoreCase = true) ||
+                    it.fileName.endsWith(".gz", ignoreCase = true) ||
+                    it.fileName.endsWith(".iso", ignoreCase = true)
             }
             else -> downloads
         }
@@ -223,7 +256,8 @@ fun DownloadsScreen(
                     LiquidSegmentTab("ALL", "All (${downloads.size})"),
                     LiquidSegmentTab("APK", "APKs"),
                     LiquidSegmentTab("MEDIA", "Media"),
-                    LiquidSegmentTab("DOCS", "Docs")
+                    LiquidSegmentTab("DOCS", "Docs"),
+                    LiquidSegmentTab("ZIP", "Archives")
                 ),
                 selectedId = activeFilter,
                 onSelect = { activeFilter = it },

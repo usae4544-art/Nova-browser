@@ -163,6 +163,8 @@ fun BrowserMainScreen(
     onOpenHistory: () -> Unit,
     onOpenNotes: () -> Unit,
     onOpenQrScanner: () -> Unit,
+    onOpenReviews: () -> Unit = {},
+    onOpenAccount: () -> Unit = {},
     onOpenIncognitoTab: () -> Unit,
     onBurnIncognitoSession: () -> Unit,
     onAddShortcut: (String, String) -> Unit,
@@ -330,7 +332,9 @@ fun BrowserMainScreen(
                         onOpenDownloads = onOpenDownloads,
                         onOpenBookmarks = onOpenBookmarks,
                         onOpenHistory = onOpenHistory,
-                        onOpenNotes = onOpenNotes
+                        onOpenNotes = onOpenNotes,
+                        onOpenReviews = onOpenReviews,
+                        onOpenAccount = onOpenAccount
                     )
                 }
             } else {
@@ -788,9 +792,15 @@ private fun TopLiquidOmnibox(
                         )
                     }
 
+                    val sakugaVfx = LocalSakugaVfx.current
+                    var omniboxInputCenter by remember { mutableStateOf(Offset.Zero) }
+
                     BasicTextField(
                         value = if (isFocused) omniboxValue else TextFieldValue(""),
-                        onValueChange = onValueChange,
+                        onValueChange = { next ->
+                            sakugaVfx?.triggerTypewriterKeyAccent(omniboxInputCenter)
+                            onValueChange(next)
+                        },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.bodyMedium.copy(
                             color = MaterialTheme.colorScheme.onSurface
@@ -805,6 +815,7 @@ private fun TopLiquidOmnibox(
                         modifier = Modifier
                             .fillMaxWidth()
                             .defaultMinSize(minHeight = 44.dp)
+                            .onGloballyPositioned { omniboxInputCenter = it.boundsInRoot().center }
                             .onFocusChanged { onFocusChanged(it.isFocused) }
                             .testTag("omnibox_input")
                     )
@@ -998,6 +1009,11 @@ private fun IphoneFloatingLiquidDock(
                 }
             }
 
+            val sakugaVfx = LocalSakugaVfx.current
+            var homeBtnCenter by remember { mutableStateOf(Offset.Zero) }
+            var newTabBtnCenter by remember { mutableStateOf(Offset.Zero) }
+            var menuBtnCenter by remember { mutableStateOf(Offset.Zero) }
+
             Row(
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
@@ -1006,10 +1022,14 @@ private fun IphoneFloatingLiquidDock(
                 GlassIconButton(
                     icon = Icons.Rounded.Home,
                     contentDescription = stringResource(R.string.cd_home),
-                    onClick = onHome,
+                    onClick = {
+                        sakugaVfx?.triggerBottomTapWave(homeBtnCenter)
+                        onHome()
+                    },
                     active = isHome,
                     testTagName = "nav_home_button",
                     modifier = Modifier.onGloballyPositioned { coords ->
+                        homeBtnCenter = coords.boundsInRoot().center
                         val p = coords.positionInParent()
                         homeSlotBounds = p.x to coords.size.width.toFloat()
                     }
@@ -1018,12 +1038,17 @@ private fun IphoneFloatingLiquidDock(
                 GlassIconButton(
                     icon = Icons.Rounded.Add,
                     contentDescription = stringResource(R.string.cd_new_tab),
-                    onClick = onNewTab,
-                    testTagName = "nav_new_tab_button"
+                    onClick = {
+                        sakugaVfx?.triggerBottomTapWave(newTabBtnCenter)
+                        onNewTab()
+                    },
+                    testTagName = "nav_new_tab_button",
+                    modifier = Modifier.onGloballyPositioned { coords ->
+                        newTabBtnCenter = coords.boundsInRoot().center
+                    }
                 )
 
-                // Liquid Glass Tab Counter Pill Button with bounce + Sakuga spark on tap
-                val sakugaVfx = LocalSakugaVfx.current
+                // Liquid Glass Tab Counter Pill Button with bounce + Sakuga bottom tap wave
                 var tabsBtnCenter by remember { mutableStateOf(Offset.Zero) }
                 val badgeScale = remember { Animatable(1f) }
                 LaunchedEffect(tabCount) {
@@ -1048,7 +1073,7 @@ private fun IphoneFloatingLiquidDock(
                         .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
                         .clip(RoundedCornerShape(16.dp))
                         .clickable(onClick = {
-                            sakugaVfx?.triggerMicroSpark(tabsBtnCenter)
+                            sakugaVfx?.triggerBottomTapWave(tabsBtnCenter)
                             onTabsClick()
                         })
                 ) {
@@ -1087,8 +1112,14 @@ private fun IphoneFloatingLiquidDock(
                 GlassIconButton(
                     icon = Icons.Rounded.MoreHoriz,
                     contentDescription = stringResource(R.string.cd_menu),
-                    onClick = onMenuClick,
-                    testTagName = "nav_menu_button"
+                    onClick = {
+                        sakugaVfx?.triggerBottomTapWave(menuBtnCenter)
+                        onMenuClick()
+                    },
+                    testTagName = "nav_menu_button",
+                    modifier = Modifier.onGloballyPositioned { coords ->
+                        menuBtnCenter = coords.boundsInRoot().center
+                    }
                 )
             }
         }

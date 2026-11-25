@@ -25,12 +25,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.AddToHomeScreen
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.ChromeReaderMode
+import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.AddBox
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
@@ -54,6 +56,7 @@ import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.VerticalAlignBottom
 import androidx.compose.material.icons.rounded.VerticalAlignTop
@@ -84,10 +87,13 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.local.UserAccountEntity
 import com.example.ui.components.GlassIconButton
 import com.example.ui.components.GlassPillChip
 import com.example.ui.components.LiquidGlassSegmentedTabs
@@ -139,7 +145,10 @@ fun BrowserMenuOverlay(
     onToggleFullscreen: () -> Unit,
     onInstallWebApp: () -> Unit,
     onOpenQrScanner: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    userAccount: UserAccountEntity? = null,
+    onOpenReviews: () -> Unit = {},
+    onOpenAccount: () -> Unit = {}
 ) {
     BackHandler(onBack = onDismiss)
     val glass = LocalNovaGlassColors.current
@@ -211,6 +220,73 @@ fun BrowserMenuOverlay(
                         .clip(RoundedCornerShape(50))
                         .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.24f))
                 )
+
+                // User Account Banner at top of menu
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(glass.glassSurfaceStrong)
+                        .border(0.8.dp, glass.glassBorder, RoundedCornerShape(16.dp))
+                        .clickable { onDismiss(); onOpenAccount() }
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .testTag("menu_account_banner")
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (userAccount != null) {
+                                        runCatching {
+                                            val c = userAccount.avatarColorHex.removePrefix("#").toLong(16)
+                                            Color(c or 0x00000000FF000000)
+                                        }.getOrDefault(glass.accentStart)
+                                    } else glass.glassBorderStrong
+                                )
+                        ) {
+                            if (userAccount != null) {
+                                Text(
+                                    text = userAccount.displayName.take(1).uppercase(),
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Rounded.AccountCircle,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = userAccount?.displayName ?: "Nova Account",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
+                            )
+                            Text(
+                                text = if (userAccount != null) "Logged in & Synced · Tap to view" else "Sign in to sync reviews & settings",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Text(
+                        text = if (userAccount != null) "Manage" else "Sign In",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = glass.accentStart
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 // Top quick strip: Forward, Refresh, Bookmark, Share, Settings
                 Row(
@@ -325,6 +401,8 @@ fun BrowserMenuOverlay(
                     MenuTileData(if (isFullscreen) "Exit Full" else "Fullscreen", if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen, isFullscreen, "menu_fullscreen") { onDismiss(); onToggleFullscreen() },
                     MenuTileData("Install Site", Icons.AutoMirrored.Rounded.AddToHomeScreen, !activeTab.isHome, "menu_install_site") { onDismiss(); onInstallWebApp() },
                     MenuTileData("QR Scanner", Icons.Rounded.QrCodeScanner, false, "menu_qr_tile") { onOpenQrScanner() },
+                    MenuTileData("Reviews", Icons.Rounded.Star, false, "menu_reviews") { onDismiss(); onOpenReviews() },
+                    MenuTileData("Account", Icons.Rounded.AccountCircle, userAccount != null, "menu_account") { onDismiss(); onOpenAccount() },
                     MenuTileData("Settings", Icons.Rounded.Settings, false, "menu_settings") { onOpenSettings() }
                 )
 

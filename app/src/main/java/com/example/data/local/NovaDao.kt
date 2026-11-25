@@ -138,3 +138,57 @@ interface SiteNotificationRuleDao {
     @Query("DELETE FROM site_notification_rules WHERE host = :host")
     suspend fun deleteByHost(host: String)
 }
+
+@Dao
+interface ReviewDao {
+    @Query("SELECT * FROM reviews ORDER BY isOwnReview DESC, createdAt DESC")
+    fun getAllReviews(): Flow<List<ReviewEntity>>
+
+    @Query("SELECT * FROM reviews WHERE isOwnReview = 1 LIMIT 1")
+    fun getOwnReview(): Flow<ReviewEntity?>
+
+    @Query("SELECT * FROM reviews WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): ReviewEntity?
+
+    @Query("SELECT COUNT(*) FROM reviews")
+    suspend fun count(): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(review: ReviewEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(reviews: List<ReviewEntity>)
+
+    @Update
+    suspend fun update(review: ReviewEntity)
+
+    @Query("UPDATE reviews SET likesCount = likesCount + 1 WHERE id = :id")
+    suspend fun incrementLike(id: Long)
+
+    @Query("DELETE FROM reviews WHERE id = :id")
+    suspend fun deleteById(id: Long)
+}
+
+@Dao
+interface UserAccountDao {
+    @Query("SELECT * FROM user_accounts WHERE isLoggedIn = 1 LIMIT 1")
+    fun getActiveAccount(): Flow<UserAccountEntity?>
+
+    @Query("SELECT * FROM user_accounts WHERE userId = :userId LIMIT 1")
+    suspend fun getById(userId: String): UserAccountEntity?
+
+    @Query("SELECT * FROM user_accounts WHERE email = :email LIMIT 1")
+    suspend fun getByEmail(email: String): UserAccountEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdate(account: UserAccountEntity)
+
+    @Query("UPDATE user_accounts SET isLoggedIn = 0")
+    suspend fun logoutAll()
+
+    @Query("UPDATE user_accounts SET isLoggedIn = 1 WHERE userId = :userId")
+    suspend fun setLoggedIn(userId: String)
+
+    @Query("DELETE FROM user_accounts WHERE userId = :userId")
+    suspend fun deleteById(userId: String)
+}

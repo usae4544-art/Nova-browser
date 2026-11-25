@@ -135,7 +135,9 @@ fun NovaHomeScreen(
     onOpenDownloads: () -> Unit,
     onOpenBookmarks: () -> Unit,
     onOpenHistory: () -> Unit,
-    onOpenNotes: () -> Unit
+    onOpenNotes: () -> Unit,
+    onOpenReviews: () -> Unit = {},
+    onOpenAccount: () -> Unit = {}
 ) {
     val glass = LocalNovaGlassColors.current
     val scrollState = rememberScrollState()
@@ -262,43 +264,81 @@ fun NovaHomeScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Live Shield / Incognito Status Pill
+            // Live Shield / Incognito Status Pill & Community Reviews Pill
             val sakugaVfx = LocalSakugaVfx.current
             var shieldPillCenter by remember { mutableStateOf(Offset.Zero) }
-            IphoneLiquidGlassPill(
-                accentGlow = adBlockEnabled || isIncognito,
-                modifier = Modifier
-                    .testTag("home_shield_pill")
-                    .onGloballyPositioned { shieldPillCenter = it.boundsInRoot().center }
-                    .clickable(onClick = {
-                        sakugaVfx?.triggerChipAccent(shieldPillCenter)
-                        onOpenAdBlock()
-                    })
+            var reviewsPillCenter by remember { mutableStateOf(Offset.Zero) }
+            var homeSearchCenter by remember { mutableStateOf(Offset.Zero) }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(horizontal = 4.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                IphoneLiquidGlassPill(
+                    accentGlow = adBlockEnabled || isIncognito,
+                    modifier = Modifier
+                        .testTag("home_shield_pill")
+                        .onGloballyPositioned { shieldPillCenter = it.boundsInRoot().center }
+                        .clickable(onClick = {
+                            sakugaVfx?.triggerChipAccent(shieldPillCenter)
+                            onOpenAdBlock()
+                        })
                 ) {
-                    Icon(
-                        imageVector = if (isIncognito) Icons.Rounded.PrivacyTip else Icons.Rounded.Shield,
-                        contentDescription = null,
-                        tint = if (isIncognito) IncognitoAccent else if (adBlockEnabled) MintSecure else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = if (isIncognito) {
-                            "Stealth Active · ${adBlockStats.totalBlocked} trackers blocked"
-                        } else if (adBlockEnabled) {
-                            "Shield Active · ${adBlockStats.totalBlocked} ads & trackers blocked"
-                        } else {
-                            "Ad Shield Paused · Tap to enable"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isIncognito) Icons.Rounded.PrivacyTip else Icons.Rounded.Shield,
+                            contentDescription = null,
+                            tint = if (isIncognito) IncognitoAccent else if (adBlockEnabled) MintSecure else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = if (isIncognito) {
+                                "Stealth · ${adBlockStats.totalBlocked}"
+                            } else if (adBlockEnabled) {
+                                "Shield · ${adBlockStats.totalBlocked}"
+                            } else {
+                                "Ad Shield Off"
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                IphoneLiquidGlassPill(
+                    accentGlow = true,
+                    modifier = Modifier
+                        .testTag("home_reviews_pill")
+                        .onGloballyPositioned { reviewsPillCenter = it.boundsInRoot().center }
+                        .clickable(onClick = {
+                            sakugaVfx?.triggerChipAccent(reviewsPillCenter)
+                            onOpenReviews()
+                        })
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Star,
+                            contentDescription = null,
+                            tint = AmberWarning,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "4.9 ★ Reviews",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
             }
 
@@ -344,7 +384,10 @@ fun NovaHomeScreen(
                         }
                         BasicTextField(
                             value = homeQuery,
-                            onValueChange = { homeQuery = it },
+                            onValueChange = { next ->
+                                homeQuery = next
+                                sakugaVfx?.triggerTypewriterKeyAccent(homeSearchCenter)
+                            },
                             singleLine = true,
                             textStyle = MaterialTheme.typography.bodyLarge.copy(
                                 color = MaterialTheme.colorScheme.onSurface
@@ -358,6 +401,7 @@ fun NovaHomeScreen(
                             ),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .onGloballyPositioned { homeSearchCenter = it.boundsInRoot().center }
                                 .testTag("home_search_input")
                         )
                     }

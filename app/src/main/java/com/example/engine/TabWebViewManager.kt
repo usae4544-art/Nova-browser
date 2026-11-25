@@ -60,7 +60,8 @@ data class TabWebEventCallbacks(
     val onScrollDirectionChanged: (hideBars: Boolean) -> Unit = {},
     val onSiteNotificationPermissionRequested: (tabId: String, origin: String, host: String, jsCallbackId: String) -> Unit = { _, _, _, _ -> },
     val onSiteNotificationPosted: (host: String, title: String, body: String, url: String) -> Unit = { _, _, _, _ -> },
-    val getSiteNotificationAllowed: (host: String) -> Boolean? = { null }
+    val getSiteNotificationAllowed: (host: String) -> Boolean? = { null },
+    val onBlobDownloadReady: (dataUrl: String, filename: String, mimeType: String) -> Unit = { _, _, _ -> }
 )
 
 data class BackNavResult(
@@ -282,6 +283,12 @@ class TabWebViewManager(
         }
 
         webView.addJavascriptInterface(NovaNotifyJsBridge(isIncognito), "__novaNotifyBridge")
+        webView.addJavascriptInterface(
+            NovaBlobBridge { dataUrl, filename, mime ->
+                callbacks?.onBlobDownloadReady?.invoke(dataUrl, filename, mime)
+            },
+            "__novaBlobBridge"
+        )
         configureWebView(webView, tabId, isIncognito, desktopMode)
         appliedSettingsCache[tabId] = currentSettings to desktopMode
         lastResumedTabId = tabId
@@ -589,12 +596,16 @@ class TabWebViewManager(
         }
 
         webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, _ ->
-            callbacks?.onDownloadRequested(
-                url,
-                userAgent.orEmpty(),
-                contentDisposition.orEmpty(),
-                mimetype.orEmpty()
-            )
+            if (url.startsWith("blob:", ignoreCase = true)) {
+                triggerBlobFetch(webView, url, contentDisposition, mimetype)
+            } else {
+                callbacks?.onDownloadRequested(
+                    url,
+                    userAgent.orEmpty(),
+                    contentDisposition.orEmpty(),
+                    mimetype.orEmpty()
+                )
+            }
         }
 
         webView.webViewClient = object : WebViewClient() {
@@ -652,9 +663,29 @@ class TabWebViewManager(
                     return true
                 }
 
+                // Intercept direct file download links so they don't break page rendering
+                val urlPath = uri.path?.lowercase().orEmpty()
+                val isDirectDownload = DOWNLOADABLE_EXTENSIONS.any { ext -> urlPath.endsWith(ext) }
+                if (isDirectDownload && (scheme == "http" || scheme == "https")) {
+                    callbacks?.onDownloadRequested(
+                        uri.toString(),
+                        view?.settings?.userAgentString.orEmpty(),
+                        "",
+                        ""
+                    )
+                    return true
+                }
+
+                if (scheme == "blob") {
+                    if (view != null) {
+                        triggerBlobFetch(view, uri.toString())
+                    }
+                    return true
+                }
+
                 // Always allow standard web & media streaming schemes inside WebView
                 if (scheme == "http" || scheme == "https" || scheme == "about" ||
-                    scheme == "blob" || scheme == "data" || scheme == "javascript"
+                    scheme == "data" || scheme == "javascript"
                 ) {
                     return false
                 }
@@ -1323,6 +1354,43 @@ class TabWebViewManager(
         }
     }
 
+    private fun triggerBlobFetch(
+        webView: WebView,
+        blobUrl: String,
+        contentDisposition: String? = null,
+        mimeType: String? = null
+    ) {
+        val escapedUrl = blobUrl.replace("'", "\\'")
+        val guessedName = (contentDisposition ?: "").replace("'", "\\'")
+        val guessedMime = (mimeType ?: "").replace("'", "\\'")
+        val script = """
+            (function() {
+                try {
+                    var xhr = new XMLHttpRequest();
+                    xhr.open('GET', '$escapedUrl', true);
+                    xhr.responseType = 'blob';
+                    xhr.onload = function() {
+                        if (this.status === 200) {
+                            var reader = new FileReader();
+                            reader.onloadend = function() {
+                                if (window.__novaBlobBridge) {
+                                    window.__novaBlobBridge.receiveBlobData(reader.result, '$guessedName', '$guessedMime' || xhr.response.type);
+                                }
+                            };
+                            reader.readAsDataURL(xhr.response);
+                        }
+                    };
+                    xhr.send();
+                } catch (e) {
+                    console.error('Blob fetch failed', e);
+                }
+            })();
+        """.trimIndent()
+        webView.post {
+            webView.evaluateJavascript(script, null)
+        }
+    }
+
     private fun destroyWebViewSafely(webView: WebView, clearData: Boolean) {
         runCatching {
             (webView.parent as? ViewGroup)?.removeView(webView)
@@ -1336,5 +1404,25 @@ class TabWebViewManager(
             webView.removeAllViews()
             webView.destroy()
         }
+    }
+
+    class NovaBlobBridge(
+        private val onBlobReady: (dataUrl: String, filename: String, mimeType: String) -> Unit
+    ) {
+        @JavascriptInterface
+        fun receiveBlobData(dataUrl: String, filename: String, mimeType: String) {
+            onBlobReady(dataUrl, filename, mimeType)
+        }
+    }
+
+    companion object {
+        val DOWNLOADABLE_EXTENSIONS = listOf(
+            ".apk", ".apks", ".xapk",
+            ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso", ".dmg",
+            ".pdf", ".epub", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv", ".rtf",
+            ".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac",
+            ".mp4", ".mkv", ".webm", ".avi", ".mov", ".flv", ".3gp",
+            ".bin", ".exe", ".msi", ".torrent"
+        )
     }
 }

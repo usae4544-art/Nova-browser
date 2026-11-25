@@ -84,3 +84,28 @@ data class SiteNotificationRuleEntity(
     val soundId: String = "GLASS_CHIME",
     val updatedAt: Long = System.currentTimeMillis()
 )
+
+@Entity(tableName = "reviews")
+data class ReviewEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val authorId: String,
+    val authorName: String,
+    val authorAvatarHex: String = "#38BDF8",
+    val rating: Int, // 1 to 5 stars
+    val comment: String,
+    val likesCount: Int = 0,
+    val isOwnReview: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "user_accounts")
+data class UserAccountEntity(
+    @PrimaryKey val userId: String,
+    val username: String,
+    val email: String,
+    val displayName: String,
+    val avatarColorHex: String = "#8B5CF6",
+    val bio: String = "Nova Browser Explorer",
+    val isLoggedIn: Boolean = true,
+    val createdAt: Long = System.currentTimeMillis()
+)
