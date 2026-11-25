@@ -1121,8 +1121,7 @@ fun SignatureConflictDialog(
                 )
                 LiquidGlassSurface(
                     modifier = Modifier.size(56.dp),
-                    shape = CircleShape,
-                    alpha = 0.18f
+                    shape = CircleShape
                 ) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Icon(
@@ -1161,8 +1160,7 @@ fun SignatureConflictDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 8.dp),
-                shape = RoundedCornerShape(12.dp),
-                alpha = 0.12f
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
