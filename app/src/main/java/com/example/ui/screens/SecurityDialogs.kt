@@ -1138,7 +1138,7 @@ fun SignatureConflictDialog(
                 text = "Update Signing Changed",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
-                color = glass.textPrimary,
+                color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center
             )
 
@@ -1149,7 +1149,7 @@ fun SignatureConflictDialog(
                         "Android requires uninstalling the old version before installing \"$fileName\".\n\n" +
                         "Your bookmarks and settings are stored separately and will be restored after reinstall.",
                 style = MaterialTheme.typography.bodyMedium,
-                color = glass.textSecondary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
 
