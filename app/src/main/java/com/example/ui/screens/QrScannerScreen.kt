@@ -55,6 +55,7 @@ import com.example.R
 import com.example.ui.components.GlassIconButton
 import com.example.ui.components.LiquidGlassSurface
 import com.example.ui.components.NovaWallpaperBackground
+import com.example.ui.components.consumeAllTouches
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.LuminousViolet
 import com.google.zxing.BinaryBitmap
@@ -96,14 +97,18 @@ fun QrScannerScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        // Consume any stray touches so taps on scanner preview or empty areas never hit Home underneath
+        Box(modifier = Modifier.fillMaxSize().consumeAllTouches())
         if (hasCameraPermission) {
             val analyzerExecutor = remember { Executors.newSingleThreadExecutor() }
             val reader = remember { MultiFormatReader() }
 
             var cameraProviderRef by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+            var imageAnalysisRef by remember { mutableStateOf<ImageAnalysis?>(null) }
 
             DisposableEffect(Unit) {
                 onDispose {
+                    runCatching { imageAnalysisRef?.clearAnalyzer() }
                     runCatching { cameraProviderRef?.unbindAll() }
                     analyzerExecutor.shutdown()
                 }
@@ -113,6 +118,8 @@ fun QrScannerScreen(
                 factory = { ctx ->
                     val previewView = PreviewView(ctx).apply {
                         implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                        isClickable = true
+                        isFocusable = true
                     }
                     val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
                     cameraProviderFuture.addListener({
@@ -125,6 +132,7 @@ fun QrScannerScreen(
                             val imageAnalysis = ImageAnalysis.Builder()
                                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                                 .build()
+                            imageAnalysisRef = imageAnalysis
 
                             imageAnalysis.setAnalyzer(analyzerExecutor) { imageProxy ->
                                 decodeQrFromImageProxy(imageProxy, reader)?.let { text ->
@@ -148,9 +156,11 @@ fun QrScannerScreen(
                 modifier = Modifier.fillMaxSize()
             )
 
-            // Futuristic Scanner Reticle
+            // Futuristic Scanner Reticle (also shields touches after AndroidView PreviewView)
             Box(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .consumeAllTouches(),
                 contentAlignment = Alignment.Center
             ) {
                 Box(
@@ -259,16 +269,45 @@ private fun decodeQrFromImageProxy(
     return try {
         val plane = imageProxy.planes.firstOrNull() ?: return null
         val buffer = plane.buffer
-        val data = ByteArray(buffer.remaining())
-        buffer.get(data)
+        val width = imageProxy.width
+        val height = imageProxy.height
+        val rowStride = plane.rowStride
+        val pixelStride = plane.pixelStride
+
+        val data = if (pixelStride == 1 && rowStride == width) {
+            ByteArray(buffer.remaining()).also { buffer.get(it) }
+        } else {
+            // Compact Y-plane rows cleanly regardless of device rowStride padding
+            val packed = ByteArray(width * height)
+            val rowBuf = ByteArray(rowStride)
+            for (row in 0 until height) {
+                val rowStart = row * rowStride
+                if (rowStart >= buffer.limit()) break
+                buffer.position(rowStart)
+                val toRead = minOf(rowStride, buffer.remaining())
+                buffer.get(rowBuf, 0, toRead)
+                if (pixelStride == 1) {
+                    System.arraycopy(rowBuf, 0, packed, row * width, minOf(width, toRead))
+                } else {
+                    for (col in 0 until width) {
+                        val idx = col * pixelStride
+                        if (idx < toRead) {
+                            packed[row * width + col] = rowBuf[idx]
+                        }
+                    }
+                }
+            }
+            packed
+        }
+
         val source = PlanarYUVLuminanceSource(
             data,
-            imageProxy.width,
-            imageProxy.height,
+            width,
+            height,
             0,
             0,
-            imageProxy.width,
-            imageProxy.height,
+            width,
+            height,
             false
         )
         val bitmap = BinaryBitmap(HybridBinarizer(source))

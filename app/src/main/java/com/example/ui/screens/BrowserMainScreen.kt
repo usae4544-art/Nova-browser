@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import android.app.Activity
+import android.graphics.Bitmap
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -10,6 +11,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -17,6 +20,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,9 +36,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -59,8 +65,6 @@ import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -71,11 +75,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -87,8 +101,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -104,7 +121,9 @@ import com.example.ui.components.GlassIconButton
 import com.example.ui.components.IphoneLiquidGlassPill
 import com.example.ui.components.LiquidGlassSurface
 import com.example.ui.components.LiquidProgressBar
+import com.example.ui.components.LocalSakugaVfx
 import com.example.ui.components.NovaWallpaperBackground
+import com.example.ui.components.sakugaSquashScale
 import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.CoralDanger
 import com.example.ui.theme.LocalNovaGlassColors
@@ -128,7 +147,7 @@ fun BrowserMainScreen(
     barsHiddenByScroll: Boolean,
     fullscreenVideoView: View?,
     webViewManager: TabWebViewManager,
-    snackbarHostState: SnackbarHostState,
+    hasOverlayOpen: Boolean = false,
     onNavigate: (String) -> Unit,
     onBack: () -> Unit,
     onHome: () -> Unit,
@@ -219,8 +238,58 @@ fun BrowserMainScreen(
         }
     }
 
+    val overlayBlurDp by animateDpAsState(
+        targetValue = if (hasOverlayOpen) 28.dp else 0.dp,
+        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+        label = "overlay_content_blur"
+    )
+    val overlayDepthScale by animateFloatAsState(
+        targetValue = if (hasOverlayOpen) 0.96f else 1f,
+        animationSpec = spring(
+            dampingRatio = 0.82f,
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "overlay_depth_scale"
+    )
+    val overlayBlurModifier = if (overlayBlurDp > 0.5.dp) {
+        Modifier.blur(radius = overlayBlurDp, edgeTreatment = BlurredEdgeTreatment.Rectangle)
+    } else {
+        Modifier
+    }
+    val glassTheme = LocalNovaGlassColors.current
+    var webBackdropBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    DisposableEffect(hasOverlayOpen, activeTab.id, activeTab.isHome, glassTheme.isDark) {
+        var active = true
+        if (hasOverlayOpen && !activeTab.isHome) {
+            val window = (view.context as? Activity)?.window
+            val fallback = if (glassTheme.isDark) {
+                android.graphics.Color.parseColor("#0A0E1B")
+            } else {
+                android.graphics.Color.WHITE
+            }
+            webViewManager.captureLowResBlurBitmap(
+                tabId = activeTab.id,
+                window = window,
+                fallbackColor = fallback
+            ) { bmp ->
+                if (active) {
+                    webBackdropBitmap = bmp
+                }
+            }
+        } else {
+            webBackdropBitmap = null
+        }
+        onDispose {
+            active = false
+            webBackdropBitmap = null
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
-        NovaWallpaperBackground(isIncognito = activeTab.isIncognito)
+        NovaWallpaperBackground(
+            isIncognito = activeTab.isIncognito,
+            backdropBlur = if (hasOverlayOpen) 28.dp else 0.dp
+        )
 
         // Smooth GPU-safe Liquid Crossfade between NOVA Home and Full-Bleed Live Webpage
         // (avoids offscreen scale RenderNode layers over AndroidView(WebView) & video surfaces)
@@ -234,29 +303,39 @@ fun BrowserMainScreen(
             modifier = Modifier.fillMaxSize()
         ) { showingHome ->
             if (showingHome) {
-                NovaHomeScreen(
-                    isIncognito = activeTab.isIncognito,
-                    searchEngine = settings.searchEngine,
-                    shortcuts = shortcuts,
-                    adBlockEnabled = settings.adBlockEnabled,
-                    adBlockStats = adBlockStats,
-                    vpnState = vpnState,
-                    chromiumInfo = chromiumInfo,
-                    topContentPadding = if (isFullscreenMode || !settings.showTopBar) 16.dp else 72.dp,
-                    bottomContentPadding = if (isFullscreenMode || isImeVisible || !settings.showBottomBar) 16.dp else 92.dp,
-                    onNavigate = onNavigate,
-                    onAddShortcut = onAddShortcut,
-                    onDeleteShortcut = onDeleteShortcut,
-                    onOpenIncognitoTab = onOpenIncognitoTab,
-                    onBurnIncognitoSession = onBurnIncognitoSession,
-                    onOpenQrScanner = onOpenQrScanner,
-                    onOpenAdBlock = onOpenAdBlock,
-                    onOpenVpn = onOpenVpn,
-                    onOpenDownloads = onOpenDownloads,
-                    onOpenBookmarks = onOpenBookmarks,
-                    onOpenHistory = onOpenHistory,
-                    onOpenNotes = onOpenNotes
-                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = overlayDepthScale
+                            scaleY = overlayDepthScale
+                        }
+                        .then(overlayBlurModifier)
+                ) {
+                    NovaHomeScreen(
+                        isIncognito = activeTab.isIncognito,
+                        searchEngine = settings.searchEngine,
+                        shortcuts = shortcuts,
+                        adBlockEnabled = settings.adBlockEnabled,
+                        adBlockStats = adBlockStats,
+                        vpnState = vpnState,
+                        chromiumInfo = chromiumInfo,
+                        topContentPadding = if (isFullscreenMode || !settings.showTopBar) 16.dp else 72.dp,
+                        bottomContentPadding = if (isFullscreenMode || isImeVisible || !settings.showBottomBar) 16.dp else 92.dp,
+                        onNavigate = onNavigate,
+                        onAddShortcut = onAddShortcut,
+                        onDeleteShortcut = onDeleteShortcut,
+                        onOpenIncognitoTab = onOpenIncognitoTab,
+                        onBurnIncognitoSession = onBurnIncognitoSession,
+                        onOpenQrScanner = onOpenQrScanner,
+                        onOpenAdBlock = onOpenAdBlock,
+                        onOpenVpn = onOpenVpn,
+                        onOpenDownloads = onOpenDownloads,
+                        onOpenBookmarks = onOpenBookmarks,
+                        onOpenHistory = onOpenHistory,
+                        onOpenNotes = onOpenNotes
+                    )
+                }
             } else {
                 // Full-bleed Chromium WebView flows seamlessly behind BOTH top & bottom transparent Liquid Glass pills
                 Box(
@@ -365,16 +444,55 @@ fun BrowserMainScreen(
                             }
                         }
                     }
+
+                    // Smooth Frosted Blur Veil over active webpage when 3-dot Menu / Overlays open
+                    AnimatedVisibility(
+                        visible = hasOverlayOpen,
+                        enter = fadeIn(tween(200)),
+                        exit = fadeOut(tween(180)),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        val glass = LocalNovaGlassColors.current
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            webBackdropBitmap?.let { bmp ->
+                                Image(
+                                    bitmap = bmp.asImageBitmap(),
+                                    contentDescription = null,
+                                    contentScale = ContentScale.FillBounds,
+                                    filterQuality = FilterQuality.High,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .then(overlayBlurModifier)
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        MaterialTheme.colorScheme.background.copy(
+                                            alpha = if (glass.isDark) 0.44f else 0.38f
+                                        )
+                                    )
+                            )
+                        }
+                    }
                 }
             }
         }
 
+        var expandCompactScrolledBars by remember(activeTab.id, barsHiddenByScroll) { mutableStateOf(false) }
         val barsVisible = !isFullscreenMode &&
             fullscreenVideoView == null &&
-            (activeTab.isHome || !barsHiddenByScroll || isOmniboxFocused || findInPage.isActive)
+            (activeTab.isHome || !barsHiddenByScroll || expandCompactScrolledBars || isOmniboxFocused || findInPage.isActive)
 
         val showTopCapsule = barsVisible && (settings.showTopBar || isOmniboxFocused || findInPage.isActive)
         val showBottomCapsule = barsVisible && !isImeVisible && settings.showBottomBar
+        val showCompactScrollBadge = !barsVisible &&
+            !isFullscreenMode &&
+            fullscreenVideoView == null &&
+            !activeTab.isHome &&
+            settings.showTopBar &&
+            !isImeVisible
 
         // Top Floating iPhone-Style Transparent Liquid Glass Search & Omnibox Capsule
         AnimatedVisibility(
@@ -390,6 +508,11 @@ fun BrowserMainScreen(
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 8.dp)
+                .graphicsLayer {
+                    scaleX = overlayDepthScale
+                    scaleY = overlayDepthScale
+                }
+                .then(overlayBlurModifier)
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -436,6 +559,49 @@ fun BrowserMainScreen(
             }
         }
 
+        // iOS 26 Safari Compact Address Pill while scrolling down full-screen pages (tap to restore bars)
+        AnimatedVisibility(
+            visible = showCompactScrollBadge,
+            enter = slideInVertically(
+                animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow)
+            ) { -it } + fadeIn(),
+            exit = slideOutVertically { -it } + fadeOut(),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(horizontal = 24.dp, vertical = 6.dp)
+                .then(overlayBlurModifier)
+        ) {
+            IphoneLiquidGlassPill(
+                accentGlow = activeTab.isIncognito,
+                modifier = Modifier
+                    .widthIn(min = 140.dp, max = 230.dp)
+                    .clickable { expandCompactScrolledBars = true }
+                    .testTag("compact_scrolled_address_pill")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Icon(
+                        imageVector = if (activeTab.isIncognito) Icons.Rounded.PrivacyTip else Icons.Rounded.Lock,
+                        contentDescription = null,
+                        tint = if (activeTab.securityState == PageSecurityState.SECURE_HTTPS) MintSecure else glassTheme.accentStart,
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = UrlResolver.displayHostOrTitle(activeTab.url, activeTab.title),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+
         // Bottom Floating iPhone (iOS 26 style) Transparent Liquid Glass Capsule Dock
         AnimatedVisibility(
             visible = showBottomCapsule,
@@ -450,6 +616,11 @@ fun BrowserMainScreen(
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
                 .padding(horizontal = 24.dp, vertical = 12.dp)
+                .graphicsLayer {
+                    scaleX = overlayDepthScale
+                    scaleY = overlayDepthScale
+                }
+                .then(overlayBlurModifier)
         ) {
             IphoneFloatingLiquidDock(
                 isHome = activeTab.isHome,
@@ -462,15 +633,16 @@ fun BrowserMainScreen(
             )
         }
 
-        // Minimal Translucent Corner Menu Handle when Bottom Dock is hidden so Menu, Tabs & Settings stay 1-tap reachable
+        // Minimal Translucent Corner Menu Handle when Bottom Dock is hidden OR compacted while scrolling down
         AnimatedVisibility(
-            visible = !settings.showBottomBar && !isFullscreenMode && fullscreenVideoView == null && !isImeVisible,
+            visible = !showBottomCapsule && !isFullscreenMode && fullscreenVideoView == null && !isImeVisible,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .navigationBarsPadding()
                 .padding(16.dp)
+                .then(overlayBlurModifier)
         ) {
             IphoneLiquidGlassPill(
                 accentGlow = activeTab.isIncognito
@@ -501,15 +673,6 @@ fun BrowserMainScreen(
                 )
             }
         }
-
-        // Snackbar Host positioned above floating iPhone Liquid Glass pill
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .navigationBarsPadding()
-                .padding(bottom = if (isFullscreenMode || isImeVisible || !settings.showBottomBar) 16.dp else 86.dp)
-        )
 
         // Fullscreen HTML5 / YouTube Video Host
         if (fullscreenVideoView != null) {
@@ -772,92 +935,165 @@ private fun IphoneFloatingLiquidDock(
     onMenuClick: () -> Unit
 ) {
     val glass = LocalNovaGlassColors.current
+    val density = LocalDensity.current
+    var homeSlotBounds by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    var tabsSlotBounds by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    val targetBounds = if (isHome) homeSlotBounds else tabsSlotBounds
+
+    val lensX by animateFloatAsState(
+        targetValue = targetBounds?.first ?: 0f,
+        animationSpec = spring(dampingRatio = 0.72f, stiffness = 360f),
+        label = "dock_liquid_lens_x"
+    )
+    val lensW by animateFloatAsState(
+        targetValue = targetBounds?.second ?: 0f,
+        animationSpec = spring(dampingRatio = 0.74f, stiffness = 340f),
+        label = "dock_liquid_lens_w"
+    )
+    val travelDist = if (targetBounds != null) abs(targetBounds.first - lensX) else 0f
+    val stretchPx = (travelDist * 0.22f).coerceIn(0f, with(density) { 18.dp.toPx() })
+    val stretchLeft = if (targetBounds != null && targetBounds.first < lensX) stretchPx * 0.5f else 0f
+    val lensHeightLift = 1f + (stretchPx / with(density) { 80.dp.toPx() }).coerceIn(0f, 0.08f)
+
     IphoneLiquidGlassPill(
         accentGlow = isIncognito,
         modifier = Modifier
             .widthIn(min = 248.dp, max = 320.dp)
             .testTag("iphone_liquid_glass_dock")
     ) {
-        Row(
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 10.dp, vertical = 5.dp)
         ) {
-            GlassIconButton(
-                icon = Icons.Rounded.Home,
-                contentDescription = stringResource(R.string.cd_home),
-                onClick = onHome,
-                active = isHome,
-                testTagName = "nav_home_button"
-            )
-
-            GlassIconButton(
-                icon = Icons.Rounded.Add,
-                contentDescription = stringResource(R.string.cd_new_tab),
-                onClick = onNewTab,
-                testTagName = "nav_new_tab_button"
-            )
-
-            // Liquid Glass Tab Counter Pill Button with bounce animation on count change
-            val badgeScale = remember { Animatable(1f) }
-            LaunchedEffect(tabCount) {
-                badgeScale.snapTo(1.26f)
-                badgeScale.animateTo(
-                    targetValue = 1f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMedium
-                    )
-                )
-            }
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .testTag("nav_tabs_button")
-                    .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable(onClick = onTabsClick)
-            ) {
+            if (lensW > 2f) {
+                val lensWidthDp = with(density) { (lensW + stretchPx).toDp() }
                 Box(
-                    contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size((28f * badgeScale.value).dp)
-                        .clip(RoundedCornerShape(9.dp))
-                        .background(
-                            Brush.linearGradient(
-                                listOf(
-                                    glass.accentStart.copy(alpha = 0.14f),
-                                    glass.accentEnd.copy(alpha = 0.14f)
+                        .matchParentSize()
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .offset { IntOffset((lensX - stretchLeft).roundToInt(), 0) }
+                            .size(width = lensWidthDp, height = 44.dp)
+                            .graphicsLayer { scaleY = lensHeightLift }
+                            .clip(RoundedCornerShape(50))
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(
+                                        glass.accentStart.copy(alpha = if (glass.isDark) 0.28f else 0.18f),
+                                        glass.accentEnd.copy(alpha = if (glass.isDark) 0.20f else 0.14f)
+                                    )
                                 )
                             )
-                        )
-                        .border(
-                            width = 1.2.dp,
-                            brush = Brush.linearGradient(
-                                listOf(
-                                    glass.accentStart.copy(alpha = 0.55f),
-                                    glass.accentEnd.copy(alpha = 0.45f)
-                                )
-                            ),
-                            shape = RoundedCornerShape(9.dp)
-                        )
-                ) {
-                    Text(
-                        text = if (tabCount > 99) "99" else tabCount.toString(),
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface
+                            .border(
+                                width = 0.85.dp,
+                                brush = Brush.verticalGradient(
+                                    listOf(
+                                        Color.White.copy(alpha = if (glass.isDark) 0.34f else 0.82f),
+                                        glass.accentStart.copy(alpha = 0.42f)
+                                    )
+                                ),
+                                shape = RoundedCornerShape(50)
+                            )
                     )
                 }
             }
 
-            GlassIconButton(
-                icon = Icons.Rounded.MoreHoriz,
-                contentDescription = stringResource(R.string.cd_menu),
-                onClick = onMenuClick,
-                testTagName = "nav_menu_button"
-            )
+            Row(
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                GlassIconButton(
+                    icon = Icons.Rounded.Home,
+                    contentDescription = stringResource(R.string.cd_home),
+                    onClick = onHome,
+                    active = isHome,
+                    testTagName = "nav_home_button",
+                    modifier = Modifier.onGloballyPositioned { coords ->
+                        val p = coords.positionInParent()
+                        homeSlotBounds = p.x to coords.size.width.toFloat()
+                    }
+                )
+
+                GlassIconButton(
+                    icon = Icons.Rounded.Add,
+                    contentDescription = stringResource(R.string.cd_new_tab),
+                    onClick = onNewTab,
+                    testTagName = "nav_new_tab_button"
+                )
+
+                // Liquid Glass Tab Counter Pill Button with bounce + Sakuga spark on tap
+                val sakugaVfx = LocalSakugaVfx.current
+                var tabsBtnCenter by remember { mutableStateOf(Offset.Zero) }
+                val badgeScale = remember { Animatable(1f) }
+                LaunchedEffect(tabCount) {
+                    badgeScale.snapTo(1.26f)
+                    badgeScale.animateTo(
+                        targetValue = 1f,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        )
+                    )
+                }
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .testTag("nav_tabs_button")
+                        .onGloballyPositioned { coords ->
+                            tabsBtnCenter = coords.boundsInRoot().center
+                            val p = coords.positionInParent()
+                            tabsSlotBounds = p.x to coords.size.width.toFloat()
+                        }
+                        .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .clickable(onClick = {
+                            sakugaVfx?.triggerMicroSpark(tabsBtnCenter)
+                            onTabsClick()
+                        })
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size((28f * badgeScale.value).dp)
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    listOf(
+                                        glass.accentStart.copy(alpha = 0.14f),
+                                        glass.accentEnd.copy(alpha = 0.14f)
+                                    )
+                                )
+                            )
+                            .border(
+                                width = 1.2.dp,
+                                brush = Brush.linearGradient(
+                                    listOf(
+                                        glass.accentStart.copy(alpha = 0.55f),
+                                        glass.accentEnd.copy(alpha = 0.45f)
+                                    )
+                                ),
+                                shape = RoundedCornerShape(9.dp)
+                            )
+                    ) {
+                        Text(
+                            text = if (tabCount > 99) "99" else tabCount.toString(),
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                GlassIconButton(
+                    icon = Icons.Rounded.MoreHoriz,
+                    contentDescription = stringResource(R.string.cd_menu),
+                    onClick = onMenuClick,
+                    testTagName = "nav_menu_button"
+                )
+            }
         }
     }
 }

@@ -1,14 +1,23 @@
 package com.example.ui.screens
 
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,19 +30,21 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Bookmarks
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.OpenInBrowser
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.TextDecrease
 import androidx.compose.material.icons.rounded.TextIncrease
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -46,28 +57,41 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.example.R
 import com.example.data.local.BookmarkEntity
 import com.example.data.local.HistoryEntity
 import com.example.data.local.QuickNoteEntity
+import com.example.engine.UrlResolver
 import com.example.ui.components.GlassIconButton
 import com.example.ui.components.GlassPillChip
+import com.example.ui.components.IphoneLiquidGlassPill
 import com.example.ui.components.LiquidGlassSurface
 import com.example.ui.components.NovaWallpaperBackground
+import com.example.ui.components.consumeAllTouches
 import com.example.ui.theme.LocalNovaGlassColors
 import com.example.viewmodel.ReadingArticle
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 
 @Composable
 fun GlassOverlayScaffold(
@@ -80,6 +104,7 @@ fun GlassOverlayScaffold(
     BackHandler(onBack = onBack)
     Box(modifier = Modifier.fillMaxSize()) {
         NovaWallpaperBackground(isIncognito = isIncognito)
+        Box(modifier = Modifier.matchParentSize().consumeAllTouches())
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -152,15 +177,11 @@ fun BookmarksScreen(
         onBack = onBack
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = { Text("Filter bookmarks...") },
-                singleLine = true,
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            LiquidGlassSearchBar(
+                query = searchQuery,
+                onQueryChange = { searchQuery = it },
+                placeholder = "Filter bookmarks...",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
             )
 
             if (filtered.isEmpty()) {
@@ -255,15 +276,11 @@ fun HistoryScreen(
         }
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = { Text("Search browsing history...") },
-                singleLine = true,
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            LiquidGlassSearchBar(
+                query = searchQuery,
+                onQueryChange = { searchQuery = it },
+                placeholder = "Search browsing history...",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
             )
 
             if (filtered.isEmpty()) {
@@ -273,51 +290,32 @@ fun HistoryScreen(
                     subtitle = "Websites you visit in standard tabs appear here automatically."
                 )
             } else {
+                Text(
+                    text = "Tap to open · Swipe sideways to remove",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)
+                )
                 LazyColumn(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(filtered, key = { it.id }) { item ->
-                        LiquidGlassSurface(
-                            shape = RoundedCornerShape(18.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onOpenUrl(item.url) }
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(start = 16.dp, end = 6.dp, top = 10.dp, bottom = 10.dp)
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = item.title,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = item.url,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = dateFormat.format(Date(item.visitedAt)),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
-                                    )
-                                }
-                                GlassIconButton(
-                                    icon = Icons.Rounded.Delete,
-                                    contentDescription = stringResource(R.string.cd_delete),
-                                    onClick = { onDeleteItem(item.id) }
+                        SwipeableHistoryCard(
+                            item = item,
+                            formattedTime = dateFormat.format(Date(item.visitedAt)),
+                            onOpen = { onOpenUrl(item.url) },
+                            onDelete = { onDeleteItem(item.id) },
+                            modifier = Modifier.animateItem(
+                                fadeInSpec = tween(220),
+                                fadeOutSpec = tween(180),
+                                placementSpec = spring(
+                                    dampingRatio = Spring.DampingRatioLowBouncy,
+                                    stiffness = Spring.StiffnessMediumLow
                                 )
-                            }
-                        }
+                            )
+                        )
                     }
                 }
             }
@@ -325,26 +323,36 @@ fun HistoryScreen(
     }
 
     if (showConfirmClear) {
-        AlertDialog(
-            onDismissRequest = { showConfirmClear = false },
-            title = { Text("Clear Browsing Data?") },
-            text = { Text("This clears browsing history, WebView cache, and site cookies.") },
-            confirmButton = {
+        LiquidGlassModalDialog(onDismissRequest = { showConfirmClear = false }) {
+            Text("Clear Browsing Data?", style = MaterialTheme.typography.titleLarge)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "This clears browsing history, WebView cache, and site cookies.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                TextButton(
+                    onClick = { showConfirmClear = false },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Cancel")
+                }
                 Button(
                     onClick = {
                         onClearAll()
                         showConfirmClear = false
-                    }
+                    },
+                    modifier = Modifier.weight(1f)
                 ) {
                     Text("Clear All")
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showConfirmClear = false }) {
-                    Text("Cancel")
-                }
             }
-        )
+        }
     }
 }
 
@@ -463,51 +471,58 @@ fun QuickNotesScreen(
         var body by remember(target) { mutableStateOf(target.content) }
         var url by remember(target) { mutableStateOf(target.sourceUrl) }
 
-        AlertDialog(
-            onDismissRequest = { showEditor = false },
-            title = { Text(if (target.id == 0L) "New Quick Note" else "Edit Note") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = title,
-                        onValueChange = { title = it },
-                        label = { Text("Title") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = body,
-                        onValueChange = { body = it },
-                        label = { Text("Notes") },
-                        minLines = 3,
-                        maxLines = 6,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = url,
-                        onValueChange = { url = it },
-                        label = { Text("Linked URL (optional)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+        LiquidGlassModalDialog(onDismissRequest = { showEditor = false }) {
+            Text(
+                text = if (target.id == 0L) "New Quick Note" else "Edit Note",
+                style = MaterialTheme.typography.titleLarge
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedTextField(
+                value = title,
+                onValueChange = { title = it },
+                label = { Text("Title") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedTextField(
+                value = body,
+                onValueChange = { body = it },
+                label = { Text("Notes") },
+                minLines = 3,
+                maxLines = 6,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedTextField(
+                value = url,
+                onValueChange = { url = it },
+                label = { Text("Linked URL (optional)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                TextButton(
+                    onClick = { showEditor = false },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Cancel")
                 }
-            },
-            confirmButton = {
                 Button(
                     onClick = {
                         onSaveNote(target.id, title, body, url)
                         showEditor = false
-                    }
+                    },
+                    modifier = Modifier.weight(1f)
                 ) {
                     Text("Save")
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showEditor = false }) {
-                    Text("Cancel")
-                }
             }
-        )
+        }
     }
 }
 
@@ -531,13 +546,15 @@ fun ReadingModeScreen(
         else -> Color(0xFFE2E8F0)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(bgColor)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-    ) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.matchParentSize().consumeAllTouches())
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(bgColor)
+                .statusBarsPadding()
+                .navigationBarsPadding()
+        ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -630,6 +647,190 @@ fun ReadingModeScreen(
                     }
                 }
             }
+        }
+    }
+    }
+}
+
+@Composable
+private fun LiquidGlassSearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier
+) {
+    val glass = LocalNovaGlassColors.current
+    IphoneLiquidGlassPill(
+        accentGlow = query.isNotEmpty(),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 48.dp)
+                .padding(start = 14.dp, end = 4.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = null,
+                tint = glass.accentStart,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Box(
+                contentAlignment = Alignment.CenterStart,
+                modifier = Modifier.weight(1f)
+            ) {
+                if (query.isEmpty()) {
+                    Text(
+                        text = placeholder,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurface
+                    ),
+                    cursorBrush = SolidColor(glass.accentStart),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("liquid_glass_search_input")
+                )
+            }
+            if (query.isNotEmpty()) {
+                GlassIconButton(
+                    icon = Icons.Rounded.Close,
+                    contentDescription = "Clear filter",
+                    onClick = { onQueryChange("") },
+                    iconSize = 18.dp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SwipeableHistoryCard(
+    item: HistoryEntity,
+    formattedTime: String,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val glass = LocalNovaGlassColors.current
+    val scope = rememberCoroutineScope()
+    var isDeleting by remember { mutableStateOf(false) }
+    val dragX = remember { Animatable(0f) }
+
+    val deleteScale by animateFloatAsState(
+        targetValue = if (isDeleting) 0.90f else 1f,
+        animationSpec = tween(180, easing = FastOutSlowInEasing),
+        label = "history_delete_scale"
+    )
+    val deleteAlpha by animateFloatAsState(
+        targetValue = if (isDeleting) 0f else (1f - (abs(dragX.value) / 380f)).coerceIn(0.28f, 1f),
+        animationSpec = tween(160),
+        label = "history_delete_alpha"
+    )
+
+    fun triggerDelete(dir: Float = 0f) {
+        if (isDeleting) return
+        isDeleting = true
+        scope.launch {
+            if (dir != 0f) {
+                dragX.animateTo(dir * 420f, tween(180, easing = FastOutSlowInEasing))
+            } else {
+                delay(150L)
+            }
+            onDelete()
+        }
+    }
+
+    val host = remember(item.url) { UrlResolver.extractHost(item.url).ifBlank { item.url } }
+    val dragBlurPx = if (isDeleting) 14f else ((abs(dragX.value) - 24f).coerceAtLeast(0f) / 14f).coerceAtMost(12f)
+
+    LiquidGlassSurface(
+        shape = RoundedCornerShape(18.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .zIndex(if (abs(dragX.value) > 2f || isDeleting) 1f else 0f)
+            .graphicsLayer {
+                translationX = dragX.value
+                scaleX = deleteScale
+                scaleY = deleteScale
+                alpha = deleteAlpha
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && dragBlurPx > 0.5f) {
+                    renderEffect = BlurEffect(dragBlurPx, dragBlurPx, TileMode.Decal)
+                }
+            }
+            .pointerInput(item.id) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (abs(dragX.value) > 140f) {
+                            triggerDelete(if (dragX.value > 0f) 1f else -1f)
+                        } else {
+                            scope.launch {
+                                dragX.animateTo(
+                                    0f,
+                                    spring(dampingRatio = Spring.DampingRatioMediumBouncy)
+                                )
+                            }
+                        }
+                    },
+                    onDragCancel = {
+                        scope.launch {
+                            dragX.animateTo(0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+                        }
+                    },
+                    onHorizontalDrag = { _, dragAmount ->
+                        scope.launch {
+                            dragX.snapTo(dragX.value + dragAmount)
+                        }
+                    }
+                )
+            }
+            .clickable(enabled = !isDeleting, onClick = onOpen)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 6.dp, top = 10.dp, bottom = 10.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "$host · $formattedTime",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = glass.accentStart.copy(alpha = 0.85f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = item.url,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            GlassIconButton(
+                icon = Icons.Rounded.Delete,
+                contentDescription = stringResource(R.string.cd_delete),
+                onClick = { triggerDelete() }
+            )
         }
     }
 }

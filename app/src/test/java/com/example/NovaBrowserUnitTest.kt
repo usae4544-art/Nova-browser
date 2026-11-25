@@ -1,12 +1,23 @@
 package com.example
 
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import com.example.data.local.AdBlockRuleEntity
+import com.example.data.local.NovaDatabase
 import com.example.data.preferences.SearchEngine
 import com.example.downloads.NovaDownloadManager
 import com.example.engine.AdBlockEngine
 import com.example.engine.PageSecurityState
 import com.example.engine.SecurityUtils
 import com.example.engine.UrlResolver
+import com.example.notifications.NovaNotificationSound
+import com.example.ui.components.SakugaPalette
+import com.example.ui.components.SakugaVfxController
+import com.example.ui.components.sakugaSquashScale
+import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.IncognitoAccent
+import com.example.vpn.VpnConnectionStatus
+import com.example.vpn.VpnRuntimeState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -141,5 +152,155 @@ class NovaBrowserUnitTest {
         assertEquals("audio/mpeg", NovaDownloadManager.resolveMimeFromFileName("song.mp3"))
         assertEquals("application/zip", NovaDownloadManager.resolveMimeFromFileName("archive.zip"))
         assertEquals("image/png", NovaDownloadManager.resolveMimeFromFileName("photo.png"))
+    }
+
+    @Test
+    fun `security utils validates IPv4 and IPv6 DNS addresses accurately`() {
+        assertTrue(SecurityUtils.isValidIpAddress("1.1.1.1"))
+        assertTrue(SecurityUtils.isValidIpAddress("8.8.8.8"))
+        assertTrue(SecurityUtils.isValidIpAddress("2606:4700:4700::1111"))
+        assertFalse(SecurityUtils.isValidIpAddress(""))
+        assertFalse(SecurityUtils.isValidIpAddress("999.999.1.1"))
+        assertFalse(SecurityUtils.isValidIpAddress("dns.google"))
+    }
+
+    @Test
+    fun `ad block engine applies domain vs path rules and respects master toggle`() {
+        val engine = AdBlockEngine()
+        engine.updateConfig(
+            adBlockOn = true,
+            trackerBlockOn = true,
+            rules = listOf(
+                AdBlockRuleEntity(id = 1, pattern = "ads.test", isAllowlist = false, enabled = true),
+                AdBlockRuleEntity(id = 2, pattern = "/banner/", isAllowlist = false, enabled = true)
+            )
+        )
+        // Domain rule does not over-block legitimate paths on unrelated hosts
+        assertNull(
+            engine.checkShouldBlock(
+                requestUrl = "https://example.org/downloads/reads.html",
+                pageUrl = "https://example.org"
+            )
+        )
+        // Path rule blocks matching path segment
+        assertNotNull(
+            engine.checkShouldBlock(
+                requestUrl = "https://example.org/assets/banner/top.png",
+                pageUrl = "https://example.org"
+            )
+        )
+        // Disabling AdBlock disables custom ad rules while keeping tracker blocking active
+        engine.updateConfig(
+            adBlockOn = false,
+            trackerBlockOn = true,
+            rules = listOf(
+                AdBlockRuleEntity(id = 1, pattern = "ads.test", isAllowlist = false, enabled = true)
+            )
+        )
+        assertNull(
+            engine.checkShouldBlock(
+                requestUrl = "https://sub.ads.test/script.js",
+                pageUrl = "https://example.org"
+            )
+        )
+        assertNotNull(
+            engine.checkShouldBlock(
+                requestUrl = "https://www.google-analytics.com/g/collect",
+                pageUrl = "https://example.org"
+            )
+        )
+    }
+
+    @Test
+    fun `notification sounds map IDs accurately with unique channel IDs and fallback`() {
+        assertEquals(NovaNotificationSound.GLASS_CHIME, NovaNotificationSound.fromId("GLASS_CHIME"))
+        assertEquals(NovaNotificationSound.CRYSTAL_PING, NovaNotificationSound.fromId("CRYSTAL_PING"))
+        assertEquals(NovaNotificationSound.AURORA_PULSE, NovaNotificationSound.fromId("AURORA_PULSE"))
+        assertEquals(NovaNotificationSound.SYSTEM_DEFAULT, NovaNotificationSound.fromId("SYSTEM_DEFAULT"))
+        assertEquals(NovaNotificationSound.GLASS_CHIME, NovaNotificationSound.fromId("UNKNOWN"))
+        assertEquals(NovaNotificationSound.GLASS_CHIME, NovaNotificationSound.fromId(null))
+
+        val uniqueChannels = NovaNotificationSound.entries.map { it.channelId }.toSet()
+        assertEquals(NovaNotificationSound.entries.size, uniqueChannels.size)
+        assertNotNull(NovaNotificationSound.GLASS_CHIME.rawResId)
+        assertNotNull(NovaNotificationSound.CRYSTAL_PING.rawResId)
+        assertNotNull(NovaNotificationSound.AURORA_PULSE.rawResId)
+        assertNull(NovaNotificationSound.SYSTEM_DEFAULT.rawResId)
+    }
+
+    @Test
+    fun `room database migration_1_2 targets version 1 to version 2`() {
+        assertEquals(1, NovaDatabase.MIGRATION_1_2.startVersion)
+        assertEquals(2, NovaDatabase.MIGRATION_1_2.endVersion)
+    }
+
+    @Test
+    fun `vpn runtime state tracks DNS forwarding count cleanly`() {
+        val disconnected = VpnRuntimeState()
+        assertEquals(VpnConnectionStatus.DISCONNECTED, disconnected.status)
+        assertEquals(0L, disconnected.queriesForwarded)
+
+        val active = disconnected.copy(
+            status = VpnConnectionStatus.CONNECTED_LOCAL_TUN,
+            dnsServer = "1.1.1.1",
+            queriesForwarded = 12L,
+            netShieldEnabled = true,
+            dohEnabled = true,
+            threatsBlocked = 4L,
+            lastBlockedDomain = "pagead2.googlesyndication.com"
+        )
+        assertEquals(12L, active.queriesForwarded)
+        assertTrue(active.netShieldEnabled)
+        assertTrue(active.dohEnabled)
+        assertEquals(4L, active.threatsBlocked)
+
+        assertTrue(AdBlockEngine.isBuiltInAdOrTrackerHost("pagead2.googlesyndication.com"))
+        assertTrue(AdBlockEngine.isBuiltInAdOrTrackerHost("sub.google-analytics.com"))
+        assertFalse(AdBlockEngine.isBuiltInAdOrTrackerHost("wikipedia.org"))
+    }
+
+    @Test
+    fun `sakuga palette adapts cleanly across Light, Dark, and Incognito modes`() {
+        val light = SakugaPalette.forTheme(isDark = false, isIncognito = false)
+        assertFalse(light.isDark)
+        assertEquals(Color(0xFFFFFFFF), light.fill)
+        assertEquals(Color(0xFFB8B3FF), light.shade)
+        assertEquals(Color(0xFF5A4FD8), light.line)
+        assertEquals(Color(0xFFFF5FA8), light.accent)
+
+        val dark = SakugaPalette.forTheme(isDark = true, isIncognito = false)
+        assertTrue(dark.isDark)
+        assertEquals(Color(0xFF172247), dark.fill)
+        assertEquals(Color(0xFF0C1229), dark.shade)
+        assertEquals(ElectricCyan, dark.line)
+        assertEquals(Color(0xFFFF5FA8), dark.accent)
+
+        val incognito = SakugaPalette.forTheme(isDark = true, isIncognito = true)
+        assertTrue(incognito.isDark)
+        assertEquals(IncognitoAccent, incognito.accent)
+        assertEquals(Color(0xFF21143D), incognito.fill)
+    }
+
+    @Test
+    fun `sakuga squash scale preserves volume and controller respects reduced motion`() {
+        val (sx, sy) = sakugaSquashScale(0.86f, wideFactor = 0.5f)
+        assertEquals(0.86f, sy, 0.001f)
+        assertEquals(1.07f, sx, 0.001f)
+
+        val reducedController = SakugaVfxController(reducedMotion = true)
+        reducedController.triggerImpactBurst(Offset(100f, 100f), 200f)
+        assertFalse(reducedController.hasActiveEffects)
+
+        val controller = SakugaVfxController(reducedMotion = false)
+        controller.triggerToastLanding(Offset(120f, 300f), 280f)
+        assertTrue(controller.hasActiveEffects)
+        controller.triggerThemeSplash(Offset(150f, 150f))
+        assertTrue(controller.hasActiveEffects)
+
+        // Stepping past maximum particle lifetime drains active particles back to idle (0% CPU)
+        repeat(45) {
+            controller.step(0.03f)
+        }
+        assertFalse(controller.hasActiveEffects)
     }
 }

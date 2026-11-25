@@ -17,11 +17,13 @@ import androidx.core.content.FileProvider
 import com.example.data.local.DownloadEntity
 import com.example.data.local.DownloadStatus
 import com.example.data.repository.BrowserRepository
+import com.example.notifications.NovaNotificationHelper
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -30,6 +32,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
@@ -73,18 +76,29 @@ class NovaDownloadManager(
         onStarted: (String) -> Unit = {}
     ) {
         scope.launch {
-            if (url.startsWith("data:", ignoreCase = true)) {
-                handleDataUriDownload(url, onStarted)
+            val cleanUrl = url.trim()
+            if (cleanUrl.startsWith("data:", ignoreCase = true)) {
+                handleDataUriDownload(cleanUrl, onStarted)
+                return@launch
+            }
+            if (cleanUrl.startsWith("blob:", ignoreCase = true)) {
+                onStarted("Blob downloads are not supported directly")
+                return@launch
+            }
+            if (!cleanUrl.startsWith("http://", ignoreCase = true) &&
+                !cleanUrl.startsWith("https://", ignoreCase = true)
+            ) {
+                onStarted("Unsupported download URL")
                 return@launch
             }
 
-            val resolvedMime = resolveBestMimeType(url, mimeType, contentDisposition)
-            val guessedName = buildCleanFileName(url, contentDisposition, resolvedMime)
+            val resolvedMime = resolveBestMimeType(cleanUrl, mimeType, contentDisposition)
+            val guessedName = buildCleanFileName(cleanUrl, contentDisposition, resolvedMime)
             val targetFile = uniqueTargetFile(getDownloadsDirectory(), guessedName)
 
             val entity = DownloadEntity(
                 fileName = targetFile.name,
-                url = url,
+                url = cleanUrl,
                 filePath = targetFile.absolutePath,
                 mimeType = resolvedMime,
                 totalBytes = -1L,
@@ -253,6 +267,10 @@ class NovaDownloadManager(
         }
     }
 
+    fun showDownloadCompletedNotification(fileName: String) {
+        NovaNotificationHelper.showDownloadNotification(context, fileName)
+    }
+
     private suspend fun handleDataUriDownload(dataUrl: String, onStarted: (String) -> Unit) {
         try {
             val header = dataUrl.substringAfter("data:", "").substringBefore(",", "")
@@ -263,7 +281,7 @@ class NovaDownloadManager(
             val bytes = if (header.contains(";base64", ignoreCase = true)) {
                 Base64.decode(payload, Base64.DEFAULT)
             } else {
-                payload.toByteArray(Charsets.UTF_8)
+                Uri.decode(payload).toByteArray(Charsets.UTF_8)
             }
             targetFile.writeBytes(bytes)
             mirrorToPublicDownloads(targetFile, mime)
@@ -292,6 +310,7 @@ class NovaDownloadManager(
     ) {
         activeJobs.remove(downloadId)?.cancel()
         val job = scope.launch {
+            val currentJob = currentCoroutineContext()[Job]
             val item = repository.getDownload(downloadId) ?: return@launch
             val file = File(item.filePath)
             file.parentFile?.mkdirs()
@@ -420,7 +439,7 @@ class NovaDownloadManager(
                     )
                 }
             } catch (ce: CancellationException) {
-                if (pausedIds.contains(downloadId)) {
+                if (pausedIds.contains(downloadId) && activeJobs[downloadId] == null) {
                     val bytes = file.takeIf { it.exists() }?.length() ?: existingBytes
                     repository.updateDownloadProgress(
                         id = downloadId,
@@ -440,7 +459,9 @@ class NovaDownloadManager(
                     errorMessage = e.localizedMessage ?: "Download failed"
                 )
             } finally {
-                activeJobs.remove(downloadId)
+                if (currentJob != null) {
+                    activeJobs.remove(downloadId, currentJob)
+                }
             }
         }
         activeJobs[downloadId] = job
@@ -559,10 +580,10 @@ class NovaDownloadManager(
             if (bytes < 0L) return "Unknown size"
             if (bytes < 1024L) return "$bytes B"
             val kb = bytes / 1024.0
-            if (kb < 1024.0) return String.format("%.1f KB", kb)
+            if (kb < 1024.0) return String.format(Locale.US, "%.1f KB", kb)
             val mb = kb / 1024.0
-            if (mb < 1024.0) return String.format("%.2f MB", mb)
-            return String.format("%.2f GB", mb / 1024.0)
+            if (mb < 1024.0) return String.format(Locale.US, "%.2f MB", mb)
+            return String.format(Locale.US, "%.2f GB", mb / 1024.0)
         }
     }
 }

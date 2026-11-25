@@ -2,12 +2,15 @@ package com.example
 
 import android.app.Application
 import android.content.Context
+import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.local.AdBlockRuleEntity
 import com.example.engine.AdBlockEngine
 import com.example.engine.UrlResolver
+import com.example.notifications.NovaNotificationSound
 import com.example.viewmodel.BrowserOverlay
 import com.example.viewmodel.BrowserViewModel
+import com.example.viewmodel.IncognitoVaultPurpose
 import com.example.vpn.VpnConnectionStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -17,6 +20,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -129,5 +133,55 @@ class NovaBrowserRobolectricTest {
         assertEquals(BrowserOverlay.Settings, vm.activeOverlay.value)
         vm.closeOverlay()
         assertEquals(BrowserOverlay.None, vm.activeOverlay.value)
+
+        // External intent never opens inside an active incognito home tab
+        assertTrue(vm.activeTab.value.id == firstTabId)
+        vm.openNewTab(isIncognito = true)
+        assertTrue(vm.activeTab.value.isIncognito)
+        vm.navigateFromExternalIntent("https://example.com")
+        assertFalse(vm.activeTab.value.isIncognito)
+        assertEquals("https://example.com", vm.activeTab.value.url)
+
+        // PIN lock verification challenge for disabling PIN
+        vm.setupIncognitoPin("2580")
+        waitUntil { vm.settings.value.incognitoLockEnabled }
+        vm.requestDisableIncognitoPin()
+        assertEquals(
+            IncognitoVaultPurpose.DISABLE_INCOGNITO_PIN,
+            vm.incognitoPinChallenge.value?.purpose
+        )
+        vm.dismissIncognitoPinChallenge()
+
+        // Backgrounding while viewing an Incognito tab locks Private Vault; biometric unlock re-opens it
+        vm.openNewTab(isIncognito = true)
+        assertTrue(vm.activeTab.value.isIncognito)
+        vm.onAppBackgrounded()
+        assertTrue(vm.isIncognitoVaultLocked.value)
+
+        vm.onBiometricUnlockSucceeded()
+        assertFalse(vm.isIncognitoVaultLocked.value)
+
+        // Per-site notification preference persists rule and sound selection
+        vm.setSiteNotificationEnabled(
+            host = "news.example.com",
+            allowed = true,
+            soundId = NovaNotificationSound.CRYSTAL_PING.id
+        )
+        waitUntil {
+            vm.siteNotificationRules.value.any {
+                it.host == "news.example.com" && it.allowed && it.soundId == NovaNotificationSound.CRYSTAL_PING.id
+            }
+        }
+        val savedRule = vm.siteNotificationRules.value.firstOrNull { it.host == "news.example.com" }
+        assertNotNull(savedRule)
+        assertEquals(NovaNotificationSound.CRYSTAL_PING.id, savedRule?.soundId)
+    }
+
+    private fun waitUntil(timeoutMs: Long = 2000L, predicate: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!predicate() && System.currentTimeMillis() < deadline) {
+            shadowOf(Looper.getMainLooper()).idle()
+            Thread.sleep(20)
+        }
     }
 }

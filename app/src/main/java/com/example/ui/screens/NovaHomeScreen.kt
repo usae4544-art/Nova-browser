@@ -32,7 +32,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -55,7 +54,6 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.VpnLock
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -78,7 +76,12 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import com.example.ui.components.LocalSakugaVfx
+import com.example.ui.components.sakugaSquashScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -100,6 +103,7 @@ import com.example.engine.ChromiumEngineInfo
 import com.example.ui.components.GlassIconButton
 import com.example.ui.components.GlassPillChip
 import com.example.ui.components.IphoneLiquidGlassPill
+import com.example.ui.components.LiquidEdgeBlurLazyRow
 import com.example.ui.components.LiquidGlassSurface
 import com.example.ui.theme.CoralDanger
 import com.example.ui.theme.IncognitoAccent
@@ -175,11 +179,15 @@ fun NovaHomeScreen(
                 .verticalScroll(scrollState)
                 .padding(
                     top = topContentPadding + 18.dp,
-                    bottom = bottomContentPadding + 24.dp,
-                    start = 18.dp,
-                    end = 18.dp
+                    bottom = bottomContentPadding + 24.dp
                 )
         ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp)
+            ) {
             // Soft Breathing Emblem
             Box(contentAlignment = Alignment.Center) {
                 Box(
@@ -255,11 +263,17 @@ fun NovaHomeScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             // Live Shield / Incognito Status Pill
+            val sakugaVfx = LocalSakugaVfx.current
+            var shieldPillCenter by remember { mutableStateOf(Offset.Zero) }
             IphoneLiquidGlassPill(
                 accentGlow = adBlockEnabled || isIncognito,
                 modifier = Modifier
                     .testTag("home_shield_pill")
-                    .clickable(onClick = onOpenAdBlock)
+                    .onGloballyPositioned { shieldPillCenter = it.boundsInRoot().center }
+                    .clickable(onClick = {
+                        sakugaVfx?.triggerChipAccent(shieldPillCenter)
+                        onOpenAdBlock()
+                    })
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -415,8 +429,13 @@ fun NovaHomeScreen(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
+                        var burnBtnCenter by remember { mutableStateOf(Offset.Zero) }
+                        var burnBtnWidth by remember { mutableStateOf(0f) }
                         Button(
-                            onClick = onBurnIncognitoSession,
+                            onClick = {
+                                sakugaVfx?.triggerImpactBurst(burnBtnCenter, burnBtnWidth)
+                                onBurnIncognitoSession()
+                            },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = CoralDanger.copy(alpha = 0.88f),
                                 contentColor = Color.White
@@ -425,6 +444,11 @@ fun NovaHomeScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(46.dp)
+                                .onGloballyPositioned {
+                                    val b = it.boundsInRoot()
+                                    burnBtnCenter = b.center
+                                    burnBtnWidth = b.width
+                                }
                                 .testTag("burn_incognito_button")
                         ) {
                             Icon(Icons.Rounded.LocalFireDepartment, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -435,12 +459,15 @@ fun NovaHomeScreen(
                 }
             }
 
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Quick Action Chips Row
-            LazyRow(
+            // Quick Action Chips Row with soft frosted blur edge dissolve on sideways scroll
+            LiquidEdgeBlurLazyRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(horizontal = 2.dp),
+                contentPadding = PaddingValues(horizontal = 20.dp),
+                edgeFadeWidth = 40.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 item {
@@ -506,20 +533,22 @@ fun NovaHomeScreen(
 
             Spacer(modifier = Modifier.height(22.dp))
 
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp)
+            ) {
+
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.Start,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
                     text = "Quick Launch",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                    text = "Long-press to remove",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
@@ -567,43 +596,6 @@ fun NovaHomeScreen(
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(22.dp))
-
-            LiquidGlassSurface(
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 12.dp)
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Engine: ${chromiumInfo.engineName}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "Version ${chromiumInfo.versionName} · Safe Browsing Ready",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(MintSecure)
-                    )
-                }
             }
         }
     }
@@ -611,68 +603,81 @@ fun NovaHomeScreen(
     if (showAddShortcutDialog) {
         var titleInput by remember { mutableStateOf("") }
         var urlInput by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { showAddShortcutDialog = false },
-            title = { Text("Add Website Shortcut") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedTextField(
-                        value = titleInput,
-                        onValueChange = { titleInput = it },
-                        label = { Text("Name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = urlInput,
-                        onValueChange = { urlInput = it },
-                        label = { Text("Website URL (e.g. wikipedia.org)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+        LiquidGlassModalDialog(onDismissRequest = { showAddShortcutDialog = false }) {
+            Text("Add Website Shortcut", style = MaterialTheme.typography.titleLarge)
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedTextField(
+                value = titleInput,
+                onValueChange = { titleInput = it },
+                label = { Text("Name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedTextField(
+                value = urlInput,
+                onValueChange = { urlInput = it },
+                label = { Text("Website URL (e.g. wikipedia.org)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                TextButton(
+                    onClick = { showAddShortcutDialog = false },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Cancel")
                 }
-            },
-            confirmButton = {
                 Button(
                     onClick = {
                         if (urlInput.isNotBlank()) {
                             onAddShortcut(titleInput, urlInput)
                             showAddShortcutDialog = false
                         }
-                    }
+                    },
+                    modifier = Modifier.weight(1f)
                 ) {
                     Text("Add")
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showAddShortcutDialog = false }) {
-                    Text("Cancel")
-                }
             }
-        )
+        }
     }
 
     shortcutToDelete?.let { item ->
-        AlertDialog(
-            onDismissRequest = { shortcutToDelete = null },
-            title = { Text("Remove Shortcut") },
-            text = { Text("Remove ${item.title} from your NOVA homepage?") },
-            confirmButton = {
+        LiquidGlassModalDialog(onDismissRequest = { shortcutToDelete = null }) {
+            Text("Remove Shortcut", style = MaterialTheme.typography.titleLarge)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Remove ${item.title} from your NOVA homepage?",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                TextButton(
+                    onClick = { shortcutToDelete = null },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Cancel")
+                }
                 Button(
                     onClick = {
                         onDeleteShortcut(item.id)
                         shortcutToDelete = null
-                    }
+                    },
+                    modifier = Modifier.weight(1f)
                 ) {
                     Text("Remove")
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { shortcutToDelete = null }) {
-                    Text("Cancel")
-                }
             }
-        )
+        }
     }
 }
 
@@ -724,30 +729,35 @@ private fun ShortcutGlassTile(
     }
     val initial = shortcut.title.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "W"
     val haptic = LocalHapticFeedback.current
+    val sakugaVfx = LocalSakugaVfx.current
+    var tileCenter by remember { mutableStateOf(Offset.Zero) }
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.88f else 1f,
+        targetValue = if (isPressed) 0.87f else 1f,
         animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
+            dampingRatio = Spring.DampingRatioLowBouncy,
             stiffness = Spring.StiffnessMedium
         ),
         label = "shortcut_scale"
     )
+    val (tileSqX, tileSqY) = sakugaSquashScale(scale, wideFactor = 0.45f)
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
             .testTag("shortcut_${shortcut.title.lowercase()}")
+            .onGloballyPositioned { tileCenter = it.boundsInRoot().center }
             .graphicsLayer {
-                scaleX = scale
-                scaleY = scale
+                scaleX = tileSqX
+                scaleY = tileSqY
             }
             .clip(RoundedCornerShape(18.dp))
             .combinedClickable(
                 interactionSource = interactionSource,
                 indication = null,
                 onClick = {
+                    sakugaVfx?.triggerMicroSpark(tileCenter)
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     onClick()
                 },

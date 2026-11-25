@@ -75,3 +75,12 @@ data class ShortcutEntity(
     val accentHex: String = "#38BDF8",
     val sortOrder: Int = 0
 )
+
+@Entity(tableName = "site_notification_rules")
+data class SiteNotificationRuleEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val host: String,
+    val allowed: Boolean = true,
+    val soundId: String = "GLASS_CHIME",
+    val updatedAt: Long = System.currentTimeMillis()
+)

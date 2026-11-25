@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
@@ -10,6 +11,10 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -48,6 +53,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,22 +62,31 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.example.R
 import com.example.engine.PageSecurityState
 import com.example.engine.UrlResolver
 import com.example.ui.components.GlassIconButton
-import com.example.ui.components.GlassPillChip
 import com.example.ui.components.IphoneLiquidGlassPill
+import com.example.ui.components.LiquidGlassSegmentedTabs
 import com.example.ui.components.LiquidGlassSurface
+import com.example.ui.components.LiquidSegmentTab
+import com.example.ui.components.LocalSakugaVfx
 import com.example.ui.components.NovaWallpaperBackground
+import com.example.ui.components.consumeAllTouches
 import com.example.ui.theme.CoralDanger
 import com.example.ui.theme.IncognitoAccent
 import com.example.ui.theme.LocalNovaGlassColors
@@ -100,14 +115,25 @@ fun TabSwitcherScreen(
     var showIncognitoSection by remember(activeTab?.isIncognito) {
         mutableStateOf(activeTab?.isIncognito == true)
     }
+    var pendingPrivateSwitch by remember { mutableStateOf(false) }
+
+    LaunchedEffect(incognitoUnlocked) {
+        if (incognitoUnlocked && pendingPrivateSwitch) {
+            showIncognitoSection = true
+            pendingPrivateSwitch = false
+        }
+    }
 
     val normalTabs = remember(tabs) { tabs.filter { !it.isIncognito } }
     val incognitoTabs = remember(tabs) { tabs.filter { it.isIncognito } }
     val displayedTabs = if (showIncognitoSection) incognitoTabs else normalTabs
     val glass = LocalNovaGlassColors.current
+    val sakugaVfx = LocalSakugaVfx.current
+    var closeAllBtnCenter by remember { mutableStateOf(Offset.Zero) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         NovaWallpaperBackground(isIncognito = showIncognitoSection)
+        Box(modifier = Modifier.matchParentSize().consumeAllTouches())
 
         Column(
             modifier = Modifier
@@ -115,36 +141,35 @@ fun TabSwitcherScreen(
                 .statusBarsPadding()
                 .navigationBarsPadding()
         ) {
-            // Top bar
+            // Top bar with iOS 26 Gliding Liquid Lens Segmented Control
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GlassPillChip(
-                        label = "Tabs (${normalTabs.size})",
-                        icon = Icons.Rounded.Language,
-                        active = !showIncognitoSection,
-                        onClick = { showIncognitoSection = false },
-                        testTagName = "tab_filter_normal"
-                    )
-                    GlassPillChip(
-                        label = "Private (${incognitoTabs.size})",
-                        icon = Icons.Rounded.PrivacyTip,
-                        active = showIncognitoSection,
-                        onClick = {
+                LiquidGlassSegmentedTabs(
+                    tabs = listOf(
+                        LiquidSegmentTab("NORMAL", "Tabs (${normalTabs.size})", Icons.Rounded.Language, "tab_filter_normal"),
+                        LiquidSegmentTab("PRIVATE", "Private (${incognitoTabs.size})", Icons.Rounded.PrivacyTip, "tab_filter_incognito")
+                    ),
+                    selectedId = if (showIncognitoSection) "PRIVATE" else "NORMAL",
+                    onSelect = { selected ->
+                        if (selected == "NORMAL") {
+                            showIncognitoSection = false
+                        } else {
                             if (incognitoLockEnabled && !incognitoUnlocked) {
+                                pendingPrivateSwitch = true
                                 onRequestUnlockIncognito()
                             } else {
                                 showIncognitoSection = true
                             }
-                        },
-                        testTagName = "tab_filter_incognito"
-                    )
-                }
+                        }
+                    },
+                    accentGlow = showIncognitoSection,
+                    modifier = Modifier.weight(1f)
+                )
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (displayedTabs.isNotEmpty()) {
@@ -152,7 +177,13 @@ fun TabSwitcherScreen(
                             icon = if (showIncognitoSection) Icons.Rounded.LocalFireDepartment else Icons.Rounded.DeleteSweep,
                             contentDescription = if (showIncognitoSection) "Burn all private tabs" else "Close all tabs in group",
                             tint = if (showIncognitoSection) CoralDanger else null,
-                            onClick = { onCloseAll(showIncognitoSection) },
+                            onClick = {
+                                if (showIncognitoSection) {
+                                    sakugaVfx?.triggerImpactBurst(closeAllBtnCenter)
+                                }
+                                onCloseAll(showIncognitoSection)
+                            },
+                            modifier = Modifier.onGloballyPositioned { closeAllBtnCenter = it.boundsInRoot().center },
                             testTagName = "close_all_tabs_button"
                         )
                     }
@@ -174,11 +205,21 @@ fun TabSwitcherScreen(
                 )
             }
 
-            // Tab Grid with animated section crossfade
+            // Tab Grid with iOS-style directional horizontal spring slide + scale transition
             AnimatedContent(
                 targetState = showIncognitoSection,
                 transitionSpec = {
-                    fadeIn(tween(220)) togetherWith fadeOut(tween(180))
+                    val dir = if (targetState) 1 else -1
+                    (slideInHorizontally(
+                        animationSpec = spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessMediumLow)
+                    ) { dir * it / 3 } +
+                        fadeIn(tween(210)) +
+                        scaleIn(initialScale = 0.96f, animationSpec = tween(220)))
+                        .togetherWith(
+                            slideOutHorizontally(tween(190)) { -dir * it / 3 } +
+                                fadeOut(tween(160)) +
+                                scaleOut(targetScale = 0.96f, animationSpec = tween(180))
+                        )
                 },
                 label = "tab_section_switch",
                 modifier = Modifier
@@ -387,6 +428,8 @@ private fun AnimatedTabPreviewCard(
         }
     }
 
+    val dragBlurPx = if (isClosing) 14f else ((abs(dragOffsetX.value) - 22f).coerceAtLeast(0f) / 14f).coerceAtMost(12f)
+
     LiquidGlassSurface(
         shape = RoundedCornerShape(22.dp),
         strong = isActive,
@@ -395,12 +438,16 @@ private fun AnimatedTabPreviewCard(
         modifier = modifier
             .fillMaxWidth()
             .height(172.dp)
+            .zIndex(if (abs(dragOffsetX.value) > 2f || isClosing) 2f else 0f)
             .graphicsLayer {
                 translationX = dragOffsetX.value
                 scaleX = closeScale
                 scaleY = closeScale
                 rotationZ = closeRotation
                 alpha = closeAlpha
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && dragBlurPx > 0.5f) {
+                    renderEffect = BlurEffect(dragBlurPx, dragBlurPx, TileMode.Decal)
+                }
             }
             .pointerInput(tab.id) {
                 detectHorizontalDragGestures(

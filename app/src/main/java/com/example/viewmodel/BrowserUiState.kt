@@ -66,6 +66,13 @@ sealed interface SitePermissionPrompt {
         val origin: String,
         val callback: GeolocationPermissions.Callback
     ) : SitePermissionPrompt
+
+    data class WebNotification(
+        val origin: String,
+        val host: String,
+        val tabId: String? = null,
+        val jsCallbackId: String? = null
+    ) : SitePermissionPrompt
 }
 
 data class ReadingArticle(
@@ -77,10 +84,19 @@ data class ReadingArticle(
 
 enum class IncognitoVaultPurpose {
     OPEN_INCOGNITO_TAB,
-    UNLOCK_INCOGNITO_TABS
+    UNLOCK_INCOGNITO_TABS,
+    DISABLE_INCOGNITO_PIN
 }
 
 data class IncognitoPinChallenge(
     val purpose: IncognitoVaultPurpose,
+    val errorMessage: String? = null
+)
+
+data class VpnPublicIpState(
+    val isChecking: Boolean = false,
+    val ipAddress: String = "",
+    val country: String = "",
+    val isp: String = "",
     val errorMessage: String? = null
 )

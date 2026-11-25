@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.ui.components.NovaWallpaperBackground
+import com.example.ui.components.consumeAllTouches
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.LuminousViolet
 import kotlinx.coroutines.delay
@@ -62,7 +63,9 @@ fun SplashOverlay(
         exit = fadeOut(animationSpec = tween(280))
     ) {
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .consumeAllTouches(),
             contentAlignment = Alignment.Center
         ) {
             NovaWallpaperBackground(isIncognito = false)

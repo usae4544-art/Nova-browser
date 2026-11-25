@@ -159,38 +159,38 @@ fun NovaBrowserTheme(
 
     val targetGlass = when {
         isIncognito -> NovaGlassColors(
-            glassSurface = Color(0x5219102E),
-            glassSurfaceStrong = Color(0x96140C26),
-            glassBorderTop = Color(0x3DC084FC),
-            glassBorderBottom = Color(0x187E22CE),
+            glassSurface = Color(0xC41E1338),
+            glassSurfaceStrong = Color(0xF7160E29),
+            glassBorderTop = Color(0x5CC084FC),
+            glassBorderBottom = Color(0x2E7E22CE),
             accentStart = IncognitoAccent,
             accentEnd = Color(0xFF9333EA),
-            glowColor = Color(0x2EA855F7),
-            chipActiveBg = Color(0x30A855F7),
+            glowColor = Color(0x3CA855F7),
+            chipActiveBg = Color(0x45A855F7),
             isDark = true,
             isIncognito = true
         )
         useDark -> NovaGlassColors(
-            glassSurface = Color(0x4D111936),
-            glassSurfaceStrong = Color(0x8C0D142C),
-            glassBorderTop = Color(0x3893C5FD),
-            glassBorderBottom = Color(0x188B5CF6),
+            glassSurface = Color(0xBF131D42),
+            glassSurfaceStrong = Color(0xF70D1430),
+            glassBorderTop = Color(0x5493C5FD),
+            glassBorderBottom = Color(0x288B5CF6),
             accentStart = ElectricCyan,
             accentEnd = LuminousViolet,
-            glowColor = Color(0x2838BDF8),
-            chipActiveBg = Color(0x2B38BDF8),
+            glowColor = Color(0x3838BDF8),
+            chipActiveBg = Color(0x3B38BDF8),
             isDark = true,
             isIncognito = false
         )
         else -> NovaGlassColors(
-            glassSurface = Color(0x5CFFFFFF),
-            glassSurfaceStrong = Color(0x9EF5F8FF),
-            glassBorderTop = Color(0x94FFFFFF),
-            glassBorderBottom = Color(0x34818CF8),
+            glassSurface = Color(0xDBF7FAFF),
+            glassSurfaceStrong = Color(0xF8F4F8FF),
+            glassBorderTop = Color(0xD8FFFFFF),
+            glassBorderBottom = Color(0x52818CF8),
             accentStart = FrostSecondary,
             accentEnd = FrostTertiary,
-            glowColor = Color(0x224338CA),
-            chipActiveBg = Color(0x224338CA),
+            glowColor = Color(0x2E4338CA),
+            chipActiveBg = Color(0x304338CA),
             isDark = false,
             isIncognito = false
         )

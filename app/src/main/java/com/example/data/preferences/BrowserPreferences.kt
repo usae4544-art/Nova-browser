@@ -45,11 +45,15 @@ data class BrowserSettings(
     val allowMicSites: Boolean = true,
     val allowLocationSites: Boolean = false,
     val notificationsEnabled: Boolean = false,
+    val siteNotificationSoundId: String = "GLASS_CHIME",
     val incognitoLockEnabled: Boolean = false,
+    val incognitoBiometricEnabled: Boolean = true,
     val incognitoPinHash: String = "",
     val incognitoPinSalt: String = "",
     val vpnDnsServer: String = "1.1.1.1",
-    val vpnGatewayAddress: String = ""
+    val vpnGatewayAddress: String = "",
+    val vpnNetShieldEnabled: Boolean = true,
+    val vpnDohEnabled: Boolean = true
 )
 
 class BrowserPreferences(private val context: Context) {
@@ -73,11 +77,15 @@ class BrowserPreferences(private val context: Context) {
         val ALLOW_MIC = booleanPreferencesKey("allow_mic")
         val ALLOW_LOCATION = booleanPreferencesKey("allow_location")
         val NOTIFICATIONS = booleanPreferencesKey("notifications_enabled")
+        val SITE_NOTIFICATION_SOUND = stringPreferencesKey("site_notification_sound")
         val INCOGNITO_LOCK = booleanPreferencesKey("incognito_lock_enabled")
+        val INCOGNITO_BIOMETRIC = booleanPreferencesKey("incognito_biometric_enabled")
         val INCOGNITO_PIN_HASH = stringPreferencesKey("incognito_pin_hash")
         val INCOGNITO_PIN_SALT = stringPreferencesKey("incognito_pin_salt")
         val VPN_DNS_SERVER = stringPreferencesKey("vpn_dns_server")
         val VPN_GATEWAY = stringPreferencesKey("vpn_gateway")
+        val VPN_NETSHIELD = booleanPreferencesKey("vpn_netshield_enabled")
+        val VPN_DOH = booleanPreferencesKey("vpn_doh_enabled")
     }
 
     val settingsFlow: Flow<BrowserSettings> = context.novaDataStore.data.map { prefs ->
@@ -104,11 +112,15 @@ class BrowserPreferences(private val context: Context) {
             allowMicSites = prefs[Keys.ALLOW_MIC] ?: true,
             allowLocationSites = prefs[Keys.ALLOW_LOCATION] ?: false,
             notificationsEnabled = prefs[Keys.NOTIFICATIONS] ?: false,
+            siteNotificationSoundId = prefs[Keys.SITE_NOTIFICATION_SOUND] ?: "GLASS_CHIME",
             incognitoLockEnabled = prefs[Keys.INCOGNITO_LOCK] ?: false,
+            incognitoBiometricEnabled = prefs[Keys.INCOGNITO_BIOMETRIC] ?: true,
             incognitoPinHash = prefs[Keys.INCOGNITO_PIN_HASH] ?: "",
             incognitoPinSalt = prefs[Keys.INCOGNITO_PIN_SALT] ?: "",
             vpnDnsServer = prefs[Keys.VPN_DNS_SERVER] ?: "1.1.1.1",
-            vpnGatewayAddress = prefs[Keys.VPN_GATEWAY] ?: ""
+            vpnGatewayAddress = prefs[Keys.VPN_GATEWAY] ?: "",
+            vpnNetShieldEnabled = prefs[Keys.VPN_NETSHIELD] ?: true,
+            vpnDohEnabled = prefs[Keys.VPN_DOH] ?: true
         )
     }
 
@@ -184,6 +196,14 @@ class BrowserPreferences(private val context: Context) {
         context.novaDataStore.edit { it[Keys.NOTIFICATIONS] = enabled }
     }
 
+    suspend fun setSiteNotificationSound(soundId: String) {
+        context.novaDataStore.edit { it[Keys.SITE_NOTIFICATION_SOUND] = soundId }
+    }
+
+    suspend fun setIncognitoBiometricEnabled(enabled: Boolean) {
+        context.novaDataStore.edit { it[Keys.INCOGNITO_BIOMETRIC] = enabled }
+    }
+
     suspend fun setIncognitoPin(hash: String, salt: String) {
         context.novaDataStore.edit {
             it[Keys.INCOGNITO_PIN_HASH] = hash
@@ -206,5 +226,13 @@ class BrowserPreferences(private val context: Context) {
 
     suspend fun setVpnGatewayAddress(address: String) {
         context.novaDataStore.edit { it[Keys.VPN_GATEWAY] = address.trim() }
+    }
+
+    suspend fun setVpnNetShieldEnabled(enabled: Boolean) {
+        context.novaDataStore.edit { it[Keys.VPN_NETSHIELD] = enabled }
+    }
+
+    suspend fun setVpnDohEnabled(enabled: Boolean) {
+        context.novaDataStore.edit { it[Keys.VPN_DOH] = enabled }
     }
 }

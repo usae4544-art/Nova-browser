@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import android.webkit.PermissionRequest
@@ -26,23 +27,41 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarResult
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.engine.BiometricHelper
 import com.example.engine.UrlResolver
 import com.example.engine.WebAppInstaller
+import com.example.notifications.NovaNotificationHelper
+import com.example.notifications.NovaNotificationSound
+import com.example.ui.components.LiquidGlassFloatingToast
+import com.example.ui.components.LocalSakugaVfx
+import com.example.ui.components.SakugaVfxCanvasOverlay
+import com.example.ui.components.consumeAllTouches
+import com.example.ui.components.rememberSakugaVfxController
+import kotlinx.coroutines.delay
 import com.example.ui.screens.AdBlockDashboardScreen
 import com.example.ui.screens.BookmarksScreen
 import com.example.ui.screens.BrowserMainScreen
@@ -50,7 +69,9 @@ import com.example.ui.screens.BrowserMenuOverlay
 import com.example.ui.screens.DownloadsScreen
 import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.IncognitoPinDialog
+import com.example.ui.screens.IncognitoVaultLockOverlay
 import com.example.ui.screens.InstallWebAppDialog
+import com.example.ui.screens.LiveDownloadFloatingCard
 import com.example.ui.screens.QrScannerScreen
 import com.example.ui.screens.QuickNotesScreen
 import com.example.ui.screens.ReadingModeScreen
@@ -71,6 +92,7 @@ import com.example.viewmodel.SitePermissionPrompt
 class MainActivity : ComponentActivity() {
 
     private val browserViewModel: BrowserViewModel by viewModels()
+    private var suppressBackgroundLock: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -78,8 +100,17 @@ class MainActivity : ComponentActivity() {
         handleIncomingIntent(intent)
 
         setContent {
-            NovaBrowserApp(viewModel = browserViewModel)
+            NovaBrowserApp(
+                viewModel = browserViewModel,
+                onSuppressNextBackgroundLock = { suppressBackgroundLock = true }
+            )
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        suppressBackgroundLock = false
+        browserViewModel.onAppForegrounded()
     }
 
     override fun onResume() {
@@ -90,6 +121,13 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         browserViewModel.onActivityPause()
         super.onPause()
+    }
+
+    override fun onStop() {
+        if (!isChangingConfigurations && !suppressBackgroundLock) {
+            browserViewModel.onAppBackgrounded()
+        }
+        super.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -112,7 +150,10 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun NovaBrowserApp(viewModel: BrowserViewModel) {
+fun NovaBrowserApp(
+    viewModel: BrowserViewModel,
+    onSuppressNextBackgroundLock: () -> Unit = {}
+) {
     val context = LocalContext.current
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val tabs by viewModel.tabs.collectAsStateWithLifecycle()
@@ -125,8 +166,10 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
     val quickNotes by viewModel.quickNotes.collectAsStateWithLifecycle()
     val adBlockRules by viewModel.adBlockRules.collectAsStateWithLifecycle()
     val shortcuts by viewModel.shortcuts.collectAsStateWithLifecycle()
+    val siteNotificationRules by viewModel.siteNotificationRules.collectAsStateWithLifecycle()
     val adBlockStats by viewModel.adBlockStats.collectAsStateWithLifecycle()
     val vpnState by viewModel.vpnState.collectAsStateWithLifecycle()
+    val vpnPublicIp by viewModel.vpnPublicIp.collectAsStateWithLifecycle()
     val findInPage by viewModel.findInPage.collectAsStateWithLifecycle()
     val isFullscreen by viewModel.isFullscreenMode.collectAsStateWithLifecycle()
     val fullscreenVideoView by viewModel.fullscreenVideoView.collectAsStateWithLifecycle()
@@ -134,15 +177,36 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
     val sitePermissionPrompt by viewModel.sitePermissionPrompt.collectAsStateWithLifecycle()
     val readingArticle by viewModel.readingArticle.collectAsStateWithLifecycle()
     val incognitoUnlocked by viewModel.incognitoUnlocked.collectAsStateWithLifecycle()
+    val isIncognitoVaultLocked by viewModel.isIncognitoVaultLocked.collectAsStateWithLifecycle()
+    val biometricPromptNonce by viewModel.biometricPromptNonce.collectAsStateWithLifecycle()
     val incognitoPinChallenge by viewModel.incognitoPinChallenge.collectAsStateWithLifecycle()
+    val activeDownloadBanner by viewModel.activeDownloadBanner.collectAsStateWithLifecycle()
     val pendingFileChooser by viewModel.pendingFileChooser.collectAsStateWithLifecycle()
     val barsHiddenByScroll by viewModel.barsHiddenByScroll.collectAsStateWithLifecycle()
     val pendingUnknownSourcesInstall by viewModel.pendingUnknownSourcesInstall.collectAsStateWithLifecycle()
+    val biometricAvailable = remember(context) { BiometricHelper.isBiometricAvailable(context) }
 
-    val snackbarHostState = remember { SnackbarHostState() }
+    var activeToastMessage by remember { mutableStateOf<String?>(null) }
+    var activeToastNonce by remember { mutableIntStateOf(0) }
     var showSplash by remember { mutableStateOf(true) }
     var showInstallWebAppDialog by remember { mutableStateOf(false) }
     var showSiteSecurityDialog by remember { mutableStateOf(false) }
+
+    // Trigger system Fingerprint / BiometricPrompt whenever requested by Private Vault
+    LaunchedEffect(biometricPromptNonce) {
+        if (biometricPromptNonce > 0) {
+            val activity = context as? Activity ?: return@LaunchedEffect
+            val launched = BiometricHelper.promptBiometricUnlock(
+                activity = activity,
+                onSuccess = viewModel::onBiometricUnlockSucceeded,
+                onUsePinOrCancel = viewModel::onBiometricFallbackToPin,
+                onError = viewModel::emitMessage
+            )
+            if (!launched) {
+                viewModel.onBiometricFallbackToPin()
+            }
+        }
+    }
 
     // Enterprise privacy: block screenshots, screen capture & Recent Apps preview in Stealth Vault (Incognito)
     LaunchedEffect(activeTab.isIncognito) {
@@ -160,6 +224,9 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
         isIncognito = activeTab.isIncognito
     )
     val shouldDarkenWebsites = effectiveDarkTheme && settings.autoDarkWebsites
+    SideEffect {
+        viewModel.updateEffectiveWebsiteDarkMode(shouldDarkenWebsites)
+    }
     LaunchedEffect(shouldDarkenWebsites) {
         viewModel.updateEffectiveWebsiteDarkMode(shouldDarkenWebsites)
     }
@@ -171,24 +238,27 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
         viewModel.resumePendingApkInstallAfterSettings()
     }
 
-    // Collect general snackbar messages
+    // Collect Liquid Glass floating toast messages (auto-dismissing with spring+blur animation)
     LaunchedEffect(Unit) {
         viewModel.snackbarMessages.collect { msg ->
-            snackbarHostState.showSnackbar(msg)
+            activeToastMessage = msg
+            activeToastNonce += 1
+        }
+    }
+    LaunchedEffect(activeToastNonce) {
+        if (activeToastNonce > 0) {
+            delay(2500L)
+            activeToastMessage = null
         }
     }
 
-    // Immediate "Install / Open" action prompt right after ANY download finishes!
+    val latestNotificationsEnabled by rememberUpdatedState(settings.notificationsEnabled)
+
+    // Immediate system notification on completed download (live progress card handles interactive UI)
     LaunchedEffect(Unit) {
         viewModel.completedDownloads.collect { finished ->
-            val isApk = finished.fileName.endsWith(".apk", ignoreCase = true)
-            val result = snackbarHostState.showSnackbar(
-                message = "Downloaded ${finished.fileName}",
-                actionLabel = if (isApk) "Install" else "Open",
-                duration = SnackbarDuration.Long
-            )
-            if (result == SnackbarResult.ActionPerformed) {
-                viewModel.openDownloadedFile(finished)
+            if (latestNotificationsEnabled) {
+                viewModel.downloadManager.showDownloadCompletedNotification(finished.fileName)
             }
         }
     }
@@ -203,6 +273,7 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
     LaunchedEffect(pendingFileChooser) {
         val pending = pendingFileChooser ?: return@LaunchedEffect
         val mimeTypes = pending.second.filter { it.isNotBlank() }.ifEmpty { listOf("*/*") }.toTypedArray()
+        onSuppressNextBackgroundLock()
         runCatching {
             fileChooserLauncher.launch(mimeTypes)
         }.onFailure {
@@ -249,14 +320,21 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
         themeMode = settings.themeMode,
         isIncognito = activeTab.isIncognito
     ) {
-        // Use a GPU-safe translucent scrim instead of RenderEffect Modifier.blur() over WebView/video surfaces
+        // Keep Menu scrim subtle so the 18dp blurred homepage/website glows visibly behind it
         val overlayScrimAlpha by animateFloatAsState(
-            targetValue = if (activeOverlay != BrowserOverlay.None) 0.34f else 0f,
-            animationSpec = tween(durationMillis = 200),
+            targetValue = when (activeOverlay) {
+                BrowserOverlay.None -> 0f
+                BrowserOverlay.Menu -> if (effectiveDarkTheme) 0.22f else 0.14f
+                else -> 0.34f
+            },
+            animationSpec = tween(durationMillis = 220),
             label = "glass_overlay_scrim"
         )
 
-        Box(modifier = Modifier.fillMaxSize()) {
+        val sakugaVfx = rememberSakugaVfxController()
+
+        CompositionLocalProvider(LocalSakugaVfx provides sakugaVfx) {
+            Box(modifier = Modifier.fillMaxSize()) {
             BrowserMainScreen(
                 activeTab = activeTab,
                 tabCount = tabs.size,
@@ -271,7 +349,14 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
                 barsHiddenByScroll = barsHiddenByScroll,
                 fullscreenVideoView = fullscreenVideoView,
                 webViewManager = viewModel.webViewManager,
-                snackbarHostState = snackbarHostState,
+                hasOverlayOpen = activeOverlay != BrowserOverlay.None ||
+                    isIncognitoVaultLocked ||
+                    showSiteSecurityDialog ||
+                    showInstallWebAppDialog ||
+                    sslWarning != null ||
+                    sitePermissionPrompt != null ||
+                    incognitoPinChallenge != null ||
+                    pendingUnknownSourcesInstall != null,
                 onNavigate = viewModel::navigateActiveTab,
                 onBack = viewModel::goBack,
                 onHome = { viewModel.goHome() },
@@ -298,13 +383,17 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
                 onExitFullscreenVideo = viewModel::exitFullscreenVideo
             )
 
-            if (overlayScrimAlpha > 0.005f) {
+            if (activeOverlay != BrowserOverlay.None || overlayScrimAlpha > 0.005f) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(
                             (if (effectiveDarkTheme) Color(0xFF030712) else Color(0xFF0F172A))
                                 .copy(alpha = overlayScrimAlpha)
+                        )
+                        .then(
+                            if (activeOverlay != BrowserOverlay.None) Modifier.consumeAllTouches()
+                            else Modifier
                         )
                 )
             }
@@ -314,13 +403,26 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
                 targetState = activeOverlay,
                 transitionSpec = {
                     if (targetState == BrowserOverlay.Menu) {
-                        (slideInVertically(tween(240, easing = FastOutSlowInEasing)) { it / 3 } +
-                            fadeIn(tween(200)))
+                        (slideInVertically(
+                            animationSpec = androidx.compose.animation.core.spring(
+                                dampingRatio = 0.80f,
+                                stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
+                            )
+                        ) { it / 2 } +
+                            fadeIn(tween(210)) +
+                            scaleIn(
+                                initialScale = 0.94f,
+                                animationSpec = androidx.compose.animation.core.spring(
+                                    dampingRatio = 0.82f,
+                                    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow
+                                )
+                            ))
                             .togetherWith(fadeOut(tween(150)))
                     } else if (initialState == BrowserOverlay.Menu && targetState == BrowserOverlay.None) {
-                        fadeIn(tween(160))
+                        fadeIn(tween(170))
                             .togetherWith(
                                 slideOutVertically(tween(200, easing = FastOutSlowInEasing)) { it / 3 } +
+                                    scaleOut(targetScale = 0.95f, animationSpec = tween(180)) +
                                     fadeOut(tween(170))
                             )
                     } else {
@@ -470,11 +572,18 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
                             vpnState = vpnState,
                             savedDns = settings.vpnDnsServer,
                             savedGateway = settings.vpnGatewayAddress,
+                            netShieldEnabled = settings.vpnNetShieldEnabled,
+                            dohEnabled = settings.vpnDohEnabled,
+                            publicIpState = vpnPublicIp,
                             isIncognito = activeTab.isIncognito,
                             onSaveDns = viewModel::setVpnDnsServer,
                             onSaveGateway = viewModel::setVpnGatewayAddress,
+                            onSetNetShield = viewModel::setVpnNetShieldEnabled,
+                            onSetDohEnabled = viewModel::setVpnDohEnabled,
+                            onCheckPublicIp = viewModel::checkVpnPublicIp,
                             onStartVpn = viewModel::startVpnConnection,
                             onStopVpn = viewModel::stopVpnConnection,
+                            onSuppressNextBackgroundLock = onSuppressNextBackgroundLock,
                             onShowMessage = viewModel::emitMessage,
                             onBack = viewModel::closeOverlay
                         )
@@ -511,15 +620,41 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
                             vpnState = vpnState,
                             chromiumInfo = viewModel.chromiumInfo,
                             isIncognito = activeTab.isIncognito,
-                            onUpdateTheme = viewModel::updateThemeMode,
-                            onUpdateSearchEngine = viewModel::updateSearchEngine,
+                            biometricAvailable = biometricAvailable,
+                            siteNotificationRules = siteNotificationRules,
+                            onUpdateTheme = { mode ->
+                                viewModel.updateThemeMode(mode)
+                                viewModel.emitMessage("Theme: ${mode.label}")
+                            },
+                            onUpdateSearchEngine = { engine ->
+                                viewModel.updateSearchEngine(engine)
+                                viewModel.emitMessage("Search Engine: ${engine.displayName}")
+                            },
                             onUpdateCustomHomepage = viewModel::updateCustomHomepage,
-                            onSetAutoDarkWebsites = viewModel::setAutoDarkWebsites,
-                            onSetShowTopBar = viewModel::setShowTopBar,
-                            onSetShowBottomBar = viewModel::setShowBottomBar,
+                            onSetAutoDarkWebsites = { enabled ->
+                                viewModel.setAutoDarkWebsites(enabled)
+                                viewModel.emitMessage(
+                                    if (enabled) "Dark Mode enabled for all websites"
+                                    else "Website Dark Mode turned off"
+                                )
+                            },
+                            onSetShowTopBar = { show ->
+                                viewModel.setShowTopBar(show)
+                                viewModel.emitMessage(if (show) "Top Floating Bar shown" else "Top Floating Bar hidden")
+                            },
+                            onSetShowBottomBar = { show ->
+                                viewModel.setShowBottomBar(show)
+                                viewModel.emitMessage(if (show) "Bottom Floating Dock shown" else "Bottom Floating Dock hidden")
+                            },
                             onSetTextZoom = viewModel::setTextZoomPercent,
-                            onSetAdBlock = viewModel::setAdBlockEnabled,
-                            onSetHttpsOnly = viewModel::setHttpsOnlyMode,
+                            onSetAdBlock = { enabled ->
+                                viewModel.setAdBlockEnabled(enabled)
+                                viewModel.emitMessage(if (enabled) "Nova Shield active" else "Nova Shield paused")
+                            },
+                            onSetHttpsOnly = { enabled ->
+                                viewModel.setHttpsOnlyMode(enabled)
+                                viewModel.emitMessage(if (enabled) "HTTPS-Only Mode enabled" else "HTTPS-Only Mode disabled")
+                            },
                             onSetCookies = viewModel::setCookiesEnabled,
                             onSetThirdPartyCookies = viewModel::setThirdPartyCookiesEnabled,
                             onSetJavaScript = viewModel::setJavaScriptEnabled,
@@ -528,18 +663,73 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
                             onSetAllowMic = viewModel::setAllowMicSites,
                             onSetAllowLocation = viewModel::setAllowLocationSites,
                             onSetNotifications = viewModel::setNotificationsEnabled,
+                            onSetSiteNotificationSound = { soundId ->
+                                viewModel.setSiteNotificationSound(soundId)
+                                NovaNotificationHelper.previewSound(
+                                    context,
+                                    NovaNotificationSound.fromId(soundId)
+                                )
+                            },
+                            onToggleSiteNotificationRule = { host, allowed ->
+                                viewModel.setSiteNotificationEnabled(host, allowed)
+                            },
+                            onDeleteSiteNotificationRule = viewModel::deleteSiteNotificationRule,
+                            onTestNotificationSound = { soundId ->
+                                viewModel.sendTestSiteNotification(soundId = soundId)
+                            },
+                            onSetIncognitoBiometric = { enabled ->
+                                viewModel.setIncognitoBiometricEnabled(enabled)
+                                viewModel.emitMessage(
+                                    if (enabled) "Fingerprint Vault Unlock enabled"
+                                    else "Fingerprint Vault Unlock disabled"
+                                )
+                            },
                             onSetupIncognitoPin = viewModel::setupIncognitoPin,
-                            onDisableIncognitoPin = viewModel::disableIncognitoPin,
+                            onRequestDisableIncognitoPin = viewModel::requestDisableIncognitoPin,
                             onClearAllBrowsingData = viewModel::clearAllBrowsingData,
                             onOpenAdBlockDashboard = { viewModel.openOverlay(BrowserOverlay.AdBlockDashboard) },
                             onOpenVpnSettings = { viewModel.openOverlay(BrowserOverlay.VpnSettings) },
                             onOpenDownloads = { viewModel.openOverlay(BrowserOverlay.Downloads) },
+                            onSuppressNextBackgroundLock = onSuppressNextBackgroundLock,
                             onShowMessage = viewModel::emitMessage,
                             onBack = viewModel::closeOverlay
                         )
                     }
                 }
             }
+
+            // Animated Liquid Glass Live Download Card with Progress & Direct Jump to Downloads
+            if (activeOverlay != BrowserOverlay.Downloads && !isIncognitoVaultLocked) {
+                LiveDownloadFloatingCard(
+                    download = activeDownloadBanner,
+                    onPause = viewModel::pauseDownload,
+                    onResume = viewModel::resumeDownload,
+                    onOpen = viewModel::openDownloadedFile,
+                    onOpenDownloads = {
+                        viewModel.dismissDownloadBanner()
+                        viewModel.openOverlay(BrowserOverlay.Downloads)
+                    },
+                    onDismiss = viewModel::dismissDownloadBanner,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(
+                            start = 16.dp,
+                            end = 16.dp,
+                            bottom = if (isFullscreen || !settings.showBottomBar) 16.dp else 88.dp
+                        )
+                )
+            }
+
+            // Fullscreen Liquid Glass Private Vault Lock Screen (when Incognito returned from background)
+            IncognitoVaultLockOverlay(
+                visible = isIncognitoVaultLocked && activeTab.isIncognito,
+                hasPinSet = settings.incognitoLockEnabled,
+                biometricAvailable = biometricAvailable && settings.incognitoBiometricEnabled,
+                onUnlockWithFingerprint = viewModel::triggerVaultUnlockPrompt,
+                onUnlockWithPin = viewModel::onBiometricFallbackToPin,
+                onExitIncognito = viewModel::exitLockedIncognitoToNormalTab
+            )
 
             // Chrome-Style Install Site Dialog
             if (showInstallWebAppDialog && !activeTab.isHome) {
@@ -595,6 +785,11 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
                                 }
                                 needed.add(Manifest.permission.ACCESS_COARSE_LOCATION)
                             }
+                            is SitePermissionPrompt.WebNotification -> {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    needed.add(Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                            }
                         }
 
                         val missing = needed.filter {
@@ -603,6 +798,7 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
                         if (missing.isEmpty()) {
                             viewModel.resolveSitePermission(true)
                         } else {
+                            onSuppressNextBackgroundLock()
                             runtimePermissionsLauncher.launch(missing.toTypedArray())
                         }
                     },
@@ -613,6 +809,8 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
             incognitoPinChallenge?.let { challenge ->
                 IncognitoPinDialog(
                     challenge = challenge,
+                    biometricAvailable = biometricAvailable && settings.incognitoBiometricEnabled,
+                    onRequestBiometric = viewModel::triggerVaultUnlockPrompt,
                     onSubmit = viewModel::submitIncognitoPin,
                     onDismiss = viewModel::dismissIncognitoPinChallenge
                 )
@@ -623,6 +821,7 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
                 UnknownSourcesPermissionDialog(
                     fileName = apkItem.fileName,
                     onOpenSettings = {
+                        onSuppressNextBackgroundLock()
                         runCatching {
                             unknownSourcesLauncher.launch(
                                 viewModel.downloadManager.createUnknownSourcesSettingsIntent()
@@ -641,24 +840,67 @@ fun NovaBrowserApp(viewModel: BrowserViewModel) {
                 val certSummary = remember(activeTab.id, activeTab.url, activeTab.lastUpdatedAt) {
                     viewModel.getActiveSiteCertificateSummary()
                 }
+                val currentSiteRule = remember(siteNotificationRules, currentHostAllowlisted, activeTab.url) {
+                    val host = UrlResolver.extractHost(activeTab.url).removePrefix("www.")
+                    siteNotificationRules.firstOrNull { it.host == host }
+                }
                 SiteSecurityInspectorDialog(
                     summary = certSummary,
                     adBlockEnabled = settings.adBlockEnabled,
                     isHostAllowlisted = currentHostAllowlisted,
                     httpsOnlyMode = settings.httpsOnlyMode,
                     isIncognito = activeTab.isIncognito,
+                    siteNotificationsAllowed = currentSiteRule?.allowed == true,
+                    siteNotificationSoundId = currentSiteRule?.soundId ?: settings.siteNotificationSoundId,
                     onToggleAllowlist = viewModel::toggleCurrentSiteAllowlist,
                     onToggleHttpsOnly = viewModel::setHttpsOnlyMode,
+                    onToggleSiteNotifications = { allowed ->
+                        viewModel.setSiteNotificationEnabled(certSummary.host, allowed)
+                    },
+                    onSelectSiteSound = { soundId ->
+                        viewModel.setSiteNotificationSoundForHost(certSummary.host, soundId)
+                    },
+                    onTestSiteNotification = {
+                        val soundId = currentSiteRule?.soundId ?: settings.siteNotificationSoundId
+                        viewModel.sendTestSiteNotification(certSummary.host, soundId)
+                    },
                     onOpenShieldDashboard = { viewModel.openOverlay(BrowserOverlay.AdBlockDashboard) },
                     onDismiss = { showSiteSecurityDialog = false }
                 )
             }
+
+            // Global Animated Liquid Glass Floating Toast (visible across Home, WebView, Menu & Settings)
+            val density = LocalDensity.current
+            val imeBottomPx = WindowInsets.ime.getBottom(density)
+            val isDownloadCardShown = activeDownloadBanner != null &&
+                activeOverlay != BrowserOverlay.Downloads &&
+                !isIncognitoVaultLocked
+            val toastBottomPadding = when {
+                imeBottomPx > 0 -> 14.dp
+                activeOverlay == BrowserOverlay.None && !isFullscreen && settings.showBottomBar ->
+                    if (isDownloadCardShown) 186.dp else 88.dp
+                isDownloadCardShown -> 122.dp
+                else -> 22.dp
+            }
+            LiquidGlassFloatingToast(
+                message = activeToastMessage,
+                onDismiss = { activeToastMessage = null },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .padding(start = 18.dp, end = 18.dp, bottom = toastBottomPadding)
+            )
+
+            // Global Sakuga VFX Particle Layer (non-touch-intercepting, theme-adaptive)
+            SakugaVfxCanvasOverlay(controller = sakugaVfx)
 
             // Fast Liquid Glass Splash Reveal
             SplashOverlay(
                 visible = showSplash,
                 onFinished = { showSplash = false }
             )
+        }
         }
     }
 }

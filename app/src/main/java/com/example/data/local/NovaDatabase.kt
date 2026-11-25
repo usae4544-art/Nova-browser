@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [
@@ -12,9 +14,10 @@ import androidx.room.RoomDatabase
         DownloadEntity::class,
         QuickNoteEntity::class,
         AdBlockRuleEntity::class,
-        ShortcutEntity::class
+        ShortcutEntity::class,
+        SiteNotificationRuleEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class NovaDatabase : RoomDatabase() {
@@ -24,10 +27,24 @@ abstract class NovaDatabase : RoomDatabase() {
     abstract fun quickNoteDao(): QuickNoteDao
     abstract fun adBlockRuleDao(): AdBlockRuleDao
     abstract fun shortcutDao(): ShortcutDao
+    abstract fun siteNotificationRuleDao(): SiteNotificationRuleDao
 
     companion object {
         @Volatile
         private var INSTANCE: NovaDatabase? = null
+
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `site_notification_rules` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`host` TEXT NOT NULL, " +
+                        "`allowed` INTEGER NOT NULL, " +
+                        "`soundId` TEXT NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL)"
+                )
+            }
+        }
 
         fun getInstance(context: Context): NovaDatabase {
             return INSTANCE ?: synchronized(this) {
@@ -35,7 +52,10 @@ abstract class NovaDatabase : RoomDatabase() {
                     context.applicationContext,
                     NovaDatabase::class.java,
                     "nova_browser.db"
-                ).build().also { INSTANCE = it }
+                )
+                    .addMigrations(MIGRATION_1_2)
+                    .build()
+                    .also { INSTANCE = it }
             }
         }
 

@@ -1,10 +1,12 @@
 package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -20,15 +22,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.AddToHomeScreen
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.ChromeReaderMode
 import androidx.compose.material.icons.rounded.AddBox
-import androidx.compose.material.icons.rounded.AddToHomeScreen
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
 import androidx.compose.material.icons.rounded.Bookmarks
@@ -61,15 +64,23 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -79,7 +90,12 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.ui.components.GlassIconButton
 import com.example.ui.components.GlassPillChip
+import com.example.ui.components.LiquidGlassSegmentedTabs
 import com.example.ui.components.LiquidGlassSurface
+import com.example.ui.components.LiquidSegmentTab
+import com.example.ui.components.LocalSakugaVfx
+import com.example.ui.components.consumeAllTouches
+import com.example.ui.components.sakugaSquashScale
 import com.example.ui.theme.AppThemeMode
 import com.example.ui.theme.LocalNovaGlassColors
 import com.example.ui.theme.MintSecure
@@ -127,13 +143,28 @@ fun BrowserMenuOverlay(
 ) {
     BackHandler(onBack = onDismiss)
     val glass = LocalNovaGlassColors.current
+    val sakugaVfx = LocalSakugaVfx.current
     val backdropInteraction = remember { MutableInteractionSource() }
+    var themeRowCenter by remember { mutableStateOf(Offset.Zero) }
+    val enterAnim = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        enterAnim.animateTo(
+            targetValue = 1f,
+            animationSpec = spring(
+                dampingRatio = 0.80f,
+                stiffness = Spring.StiffnessMediumLow
+            )
+        )
+    }
+    val settleProgress = enterAnim.value.coerceIn(0f, 1f)
+    val sheetRevealBlur = ((1f - settleProgress) * 6f).dp
+    val contentScale = 0.96f + 0.04f * settleProgress
 
     Box(
         contentAlignment = Alignment.BottomCenter,
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = if (glass.isDark) 0.42f else 0.28f))
+            .consumeAllTouches()
             .clickable(
                 interactionSource = backdropInteraction,
                 indication = null,
@@ -144,10 +175,21 @@ fun BrowserMenuOverlay(
             shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
             strong = true,
             accentBorder = true,
-            elevation = 16.dp,
+            elevation = 20.dp,
             modifier = Modifier
                 .fillMaxWidth()
                 .widthIn(max = 620.dp)
+                .graphicsLayer {
+                    scaleX = contentScale
+                    scaleY = contentScale
+                }
+                .then(
+                    if (sheetRevealBlur > 0.4.dp) {
+                        Modifier.blur(radius = sheetRevealBlur, edgeTreatment = BlurredEdgeTreatment.Rectangle)
+                    } else {
+                        Modifier
+                    }
+                )
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -159,8 +201,19 @@ fun BrowserMenuOverlay(
                     .fillMaxWidth()
                     .navigationBarsPadding()
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
+                // Sleek iOS-style frosted sheet handle
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .padding(bottom = 8.dp)
+                        .width(42.dp)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.24f))
+                )
+
                 // Top quick strip: Forward, Refresh, Bookmark, Share, Settings
                 Row(
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -207,37 +260,24 @@ fun BrowserMenuOverlay(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Quick System / Dark / Light Liquid Glass Theme Switcher Bar
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    GlassPillChip(
-                        label = "System",
-                        icon = Icons.Rounded.BrightnessAuto,
-                        active = themeMode == AppThemeMode.SYSTEM,
-                        onClick = { onUpdateTheme(AppThemeMode.SYSTEM) },
-                        testTagName = "menu_theme_system",
-                        modifier = Modifier.weight(1f)
-                    )
-                    GlassPillChip(
-                        label = "Dark",
-                        icon = Icons.Rounded.DarkMode,
-                        active = themeMode == AppThemeMode.DARK,
-                        onClick = { onUpdateTheme(AppThemeMode.DARK) },
-                        testTagName = "menu_theme_dark",
-                        modifier = Modifier.weight(1f)
-                    )
-                    GlassPillChip(
-                        label = "Light",
-                        icon = Icons.Rounded.LightMode,
-                        active = themeMode == AppThemeMode.LIGHT,
-                        onClick = { onUpdateTheme(AppThemeMode.LIGHT) },
-                        testTagName = "menu_theme_light",
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                // Quick System / Dark / Light iOS 26 Gliding Liquid Lens Theme Switcher
+                LiquidGlassSegmentedTabs(
+                    tabs = listOf(
+                        LiquidSegmentTab("SYSTEM", "System", Icons.Rounded.BrightnessAuto, "menu_theme_system"),
+                        LiquidSegmentTab("DARK", "Dark", Icons.Rounded.DarkMode, "menu_theme_dark"),
+                        LiquidSegmentTab("LIGHT", "Light", Icons.Rounded.LightMode, "menu_theme_light")
+                    ),
+                    selectedId = themeMode.name,
+                    onSelect = { selected ->
+                        val nextMode = AppThemeMode.valueOf(selected)
+                        sakugaVfx?.triggerThemeSplash(themeRowCenter)
+                        onUpdateTheme(nextMode)
+                    },
+                    accentGlow = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onGloballyPositioned { themeRowCenter = it.boundsInRoot().center }
+                )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -288,7 +328,7 @@ fun BrowserMenuOverlay(
                     MenuTileData("Translate", Icons.Rounded.Translate, false, "menu_translate") { onTranslatePage() },
                     MenuTileData("Desktop Site", Icons.Rounded.DesktopWindows, activeTab.desktopMode, "menu_desktop") { onDismiss(); onToggleDesktopMode() },
                     MenuTileData(if (isFullscreen) "Exit Full" else "Fullscreen", if (isFullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen, isFullscreen, "menu_fullscreen") { onDismiss(); onToggleFullscreen() },
-                    MenuTileData("Install Site", Icons.Rounded.AddToHomeScreen, !activeTab.isHome, "menu_install_site") { onDismiss(); onInstallWebApp() },
+                    MenuTileData("Install Site", Icons.AutoMirrored.Rounded.AddToHomeScreen, !activeTab.isHome, "menu_install_site") { onDismiss(); onInstallWebApp() },
                     MenuTileData("QR Scanner", Icons.Rounded.QrCodeScanner, false, "menu_qr_tile") { onOpenQrScanner() },
                     MenuTileData("Settings", Icons.Rounded.Settings, false, "menu_settings") { onOpenSettings() }
                 )
@@ -331,36 +371,54 @@ private fun MenuActionTile(
 ) {
     val glass = LocalNovaGlassColors.current
     val haptic = LocalHapticFeedback.current
+    val sakugaVfx = LocalSakugaVfx.current
+    var tileCenter by remember { mutableStateOf(Offset.Zero) }
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val tileScale by animateFloatAsState(
-        targetValue = if (isPressed) 0.92f else 1f,
+        targetValue = if (isPressed) 0.89f else 1f,
         animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
+            dampingRatio = Spring.DampingRatioLowBouncy,
             stiffness = Spring.StiffnessMedium
         ),
         label = "menu_tile_scale"
     )
+    val (tileSquashX, tileSquashY) = sakugaSquashScale(tileScale, wideFactor = 0.48f)
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
         modifier = modifier
             .testTag(data.testTag)
+            .onGloballyPositioned { tileCenter = it.boundsInRoot().center }
             .graphicsLayer {
-                scaleX = tileScale
-                scaleY = tileScale
+                scaleX = tileSquashX
+                scaleY = tileSquashY
             }
             .defaultMinSize(minHeight = 72.dp)
             .clip(RoundedCornerShape(18.dp))
             .background(
                 if (data.highlighted) glass.chipActiveBg
-                else glass.glassSurface.copy(alpha = (glass.glassSurface.alpha * 0.85f))
+                else glass.glassSurface.copy(alpha = (glass.glassSurface.alpha * 0.90f))
+            )
+            .border(
+                width = 0.7.dp,
+                color = if (data.highlighted) {
+                    glass.accentStart.copy(alpha = 0.48f)
+                } else {
+                    glass.glassBorderTop.copy(alpha = 0.42f)
+                },
+                shape = RoundedCornerShape(18.dp)
             )
             .clickable(
                 interactionSource = interactionSource,
                 indication = ripple(bounded = true, color = glass.accentStart),
                 onClick = {
+                    if (data.testTag == "menu_dark_sites") {
+                        sakugaVfx?.triggerThemeSplash(tileCenter)
+                    } else {
+                        sakugaVfx?.triggerChipAccent(tileCenter)
+                    }
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     data.onClick()
                 }

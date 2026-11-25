@@ -14,14 +14,17 @@ import com.example.data.local.HistoryEntity
 import com.example.data.local.NovaDatabase
 import com.example.data.local.QuickNoteEntity
 import com.example.data.local.ShortcutEntity
+import com.example.data.local.SiteNotificationRuleEntity
 import com.example.data.preferences.BrowserPreferences
 import com.example.data.preferences.BrowserSettings
 import com.example.data.preferences.SearchEngine
 import com.example.data.repository.BrowserRepository
 import com.example.downloads.NovaDownloadManager
 import com.example.downloads.OpenFileOutcome
+import com.example.data.local.DownloadStatus
 import com.example.engine.AdBlockEngine
 import com.example.engine.AdBlockStats
+import com.example.engine.BiometricHelper
 import com.example.engine.ChromiumEngineInfo
 import com.example.engine.PageSecurityState
 import com.example.engine.SecurityUtils
@@ -30,10 +33,14 @@ import com.example.engine.TabWebEventCallbacks
 import com.example.engine.TabWebViewManager
 import com.example.engine.UrlResolver
 import com.example.engine.WebAppInstaller
+import com.example.notifications.NovaNotificationHelper
+import com.example.notifications.NovaNotificationSound
 import com.example.ui.theme.AppThemeMode
 import com.example.vpn.NovaVpnService
+import com.example.vpn.VpnConnectionStatus
 import com.example.vpn.VpnRuntimeState
 import com.example.vpn.VpnStateHolder
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -45,6 +52,11 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 
 class BrowserViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -98,8 +110,23 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         initialValue = NovaDatabase.defaultShortcuts
     )
 
+    val siteNotificationRules: StateFlow<List<SiteNotificationRuleEntity>> =
+        repository.siteNotificationRules.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = emptyList()
+        )
+
     val adBlockStats: StateFlow<AdBlockStats> = adBlockEngine.stats
     val vpnState: StateFlow<VpnRuntimeState> = VpnStateHolder.state
+    private val _vpnPublicIp = MutableStateFlow(VpnPublicIpState())
+    val vpnPublicIp: StateFlow<VpnPublicIpState> = _vpnPublicIp.asStateFlow()
+    private val vpnIpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(6, TimeUnit.SECONDS)
+            .readTimeout(6, TimeUnit.SECONDS)
+            .build()
+    }
     val completedDownloads: SharedFlow<DownloadEntity> = downloadManager.completedDownloads
 
     private val initialTab = BrowserTab()
@@ -110,9 +137,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     val activeTabId: StateFlow<String> = _activeTabId.asStateFlow()
 
     private val _tabVisitHistory = MutableStateFlow<List<String>>(emptyList())
-    val hasPreviousTabInHistory: StateFlow<Boolean> = combine(_tabVisitHistory, _tabs) { stack, currentTabs ->
+    val hasPreviousTabInHistory: StateFlow<Boolean> = combine(_tabVisitHistory, _tabs, _activeTabId) { stack, currentTabs, currentActiveId ->
         val validIds = currentTabs.map { it.id }.toSet()
-        stack.any { it in validIds && it != _activeTabId.value }
+        stack.any { it in validIds && it != currentActiveId }
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.Eagerly,
@@ -148,8 +175,35 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     private val _incognitoUnlocked = MutableStateFlow(false)
     val incognitoUnlocked: StateFlow<Boolean> = _incognitoUnlocked.asStateFlow()
 
+    private val _isIncognitoVaultLocked = MutableStateFlow(false)
+    val isIncognitoVaultLocked: StateFlow<Boolean> = _isIncognitoVaultLocked.asStateFlow()
+
+    private val _biometricPromptNonce = MutableStateFlow(0)
+    val biometricPromptNonce: StateFlow<Int> = _biometricPromptNonce.asStateFlow()
+
     private val _incognitoPinChallenge = MutableStateFlow<IncognitoPinChallenge?>(null)
     val incognitoPinChallenge: StateFlow<IncognitoPinChallenge?> = _incognitoPinChallenge.asStateFlow()
+
+    private val _activeDownloadBannerId = MutableStateFlow<Long?>(null)
+    private val _downloadBannerDismissed = MutableStateFlow(false)
+    val activeDownloadBanner: StateFlow<DownloadEntity?> = combine(
+        downloads,
+        _activeDownloadBannerId,
+        _downloadBannerDismissed
+    ) { list, targetId, dismissed ->
+        if (dismissed) null
+        else {
+            val selected = targetId?.let { id -> list.firstOrNull { it.id == id } }
+            selected ?: list.firstOrNull {
+                it.downloadStatus == DownloadStatus.DOWNLOADING || it.downloadStatus == DownloadStatus.QUEUED
+            }
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = null
+    )
+    private var lastSeenTopDownloadId: Long = -1L
 
     private val _fullscreenVideoView = MutableStateFlow<View?>(null)
     val fullscreenVideoView: StateFlow<View?> = _fullscreenVideoView.asStateFlow()
@@ -169,10 +223,36 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     private var lastNavigationSignature: String = ""
     private var lastNavigationTimeMs: Long = 0L
+    private val bypassedSslHosts = ConcurrentHashMap<String, MutableSet<String>>()
+    private var failedPinAttempts: Int = 0
+    private var pinLockoutUntilMs: Long = 0L
+
+    private fun isSslBypassed(tabId: String, url: String): Boolean {
+        val host = UrlResolver.extractHost(url)
+        return host.isNotBlank() && bypassedSslHosts[tabId]?.contains(host) == true
+    }
 
     init {
         viewModelScope.launch {
             repository.ensureDefaultShortcuts()
+        }
+
+        // Automatically surface the animated Liquid Glass Live Download Card when any download starts
+        viewModelScope.launch {
+            repository.downloads.collect { list ->
+                val newest = list.firstOrNull()
+                if (newest != null && newest.id > lastSeenTopDownloadId) {
+                    val isInitialLoad = lastSeenTopDownloadId == -1L
+                    lastSeenTopDownloadId = newest.id
+                    if (!isInitialLoad ||
+                        newest.downloadStatus == DownloadStatus.DOWNLOADING ||
+                        newest.downloadStatus == DownloadStatus.QUEUED
+                    ) {
+                        _activeDownloadBannerId.value = newest.id
+                        _downloadBannerDismissed.value = false
+                    }
+                }
+            }
         }
 
         // Sync settings & rules into AdBlockEngine and WebView pool continuously
@@ -185,6 +265,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                         rules = rules
                     )
                     webViewManager.updateGlobalSettings(s)
+                    if (s.incognitoLockEnabled && !_incognitoUnlocked.value && activeTab.value.isIncognito) {
+                        _isIncognitoVaultLocked.value = true
+                    }
                 }
         }
 
@@ -197,7 +280,10 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                             isLoading = true,
                             progress = 12,
                             networkErrorMessage = null,
-                            securityState = SecurityUtils.classifyUrlSecurity(url)
+                            securityState = SecurityUtils.classifyUrlSecurity(
+                                url = url,
+                                hasSslError = isSslBypassed(tabId, url)
+                            )
                         )
                     }
                 },
@@ -211,7 +297,10 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                             progress = 100,
                             canGoBack = canBack,
                             canGoForward = canForward,
-                            securityState = SecurityUtils.classifyUrlSecurity(url),
+                            securityState = SecurityUtils.classifyUrlSecurity(
+                                url = url,
+                                hasSslError = isSslBypassed(tabId, url)
+                            ),
                             lastUpdatedAt = System.currentTimeMillis()
                         )
                     }
@@ -233,12 +322,17 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     updateTab(tabId) { it.copy(title = title) }
                 },
                 onNavigationStateChanged = { tabId, url, canBack, canForward ->
+                    val resolved = url.ifBlank { activeTab.value.url }
                     updateTab(tabId) { tab ->
+                        val targetUrl = url.ifBlank { tab.url }
                         tab.copy(
-                            url = if (url.isNotBlank()) url else tab.url,
+                            url = targetUrl,
                             canGoBack = canBack,
                             canGoForward = canForward,
-                            securityState = SecurityUtils.classifyUrlSecurity(url.ifBlank { tab.url })
+                            securityState = SecurityUtils.classifyUrlSecurity(
+                                url = targetUrl,
+                                hasSslError = isSslBypassed(tabId, resolved)
+                            )
                         )
                     }
                 },
@@ -253,13 +347,17 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     }
                 },
                 onSslError = { tabId, host, primaryError, handler ->
+                    val prev = _sslWarning.value
+                    if (prev != null && prev.handler !== handler) {
+                        prev.handler.cancel()
+                    }
                     updateTab(tabId) {
                         it.copy(securityState = PageSecurityState.CERT_ERROR, isLoading = false)
                     }
                     _sslWarning.value = SslWarningRequest(tabId, host, primaryError, handler)
                 },
                 onDownloadRequested = { url, userAgent, contentDisposition, mimeType ->
-                    startFileDownload(url, userAgent, contentDisposition, mimeType)
+                    startFileDownload(url, userAgent, contentDisposition, mimeType, fromWebView = true)
                 },
                 onOpenNewTabUrl = { url, isIncognito ->
                     openNewTab(
@@ -305,6 +403,44 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     } else {
                         _barsHiddenByScroll.value = false
                     }
+                },
+                onSiteNotificationPermissionRequested = { tabId, origin, host, jsCallbackId ->
+                    if (!settings.value.notificationsEnabled) {
+                        webViewManager.resolveJsNotificationPermission(tabId, jsCallbackId, false)
+                    } else {
+                        _sitePermissionPrompt.value = SitePermissionPrompt.WebNotification(
+                            origin = origin,
+                            host = host,
+                            tabId = tabId,
+                            jsCallbackId = jsCallbackId
+                        )
+                    }
+                },
+                onSiteNotificationPosted = { host, title, body, url ->
+                    val s = settings.value
+                    if (!s.notificationsEnabled) return@TabWebEventCallbacks
+                    val rule = siteNotificationRules.value.firstOrNull { it.host == host }
+                    if (rule != null && rule.allowed) {
+                        val sound = NovaNotificationSound.fromId(
+                            rule.soundId.ifBlank { s.siteNotificationSoundId }
+                        )
+                        NovaNotificationHelper.showSiteNotification(
+                            context = getApplication(),
+                            host = host,
+                            title = title,
+                            body = body,
+                            sound = sound,
+                            targetUrl = url
+                        )
+                    }
+                },
+                getSiteNotificationAllowed = { host ->
+                    if (!settings.value.notificationsEnabled) {
+                        false
+                    } else {
+                        val clean = host.trim().lowercase().removePrefix("www.")
+                        siteNotificationRules.value.firstOrNull { it.host == clean }?.allowed
+                    }
                 }
             )
         )
@@ -326,9 +462,49 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         webViewManager.onActivityPause()
     }
 
+    fun onAppBackgrounded() {
+        val s = settings.value
+        val hasBiometric = s.incognitoBiometricEnabled && BiometricHelper.isBiometricAvailable(getApplication())
+        val shouldLock = (activeTab.value.isIncognito && (s.incognitoLockEnabled || hasBiometric)) ||
+            (s.incognitoLockEnabled && _tabs.value.any { it.isIncognito })
+        if (shouldLock) {
+            _incognitoUnlocked.value = false
+            if (activeTab.value.isIncognito) {
+                _isIncognitoVaultLocked.value = true
+            }
+        }
+    }
+
+    fun onAppForegrounded() {
+        if (_isIncognitoVaultLocked.value && activeTab.value.isIncognito) {
+            triggerVaultUnlockPrompt()
+        }
+    }
+
+    fun triggerVaultUnlockPrompt() {
+        val s = settings.value
+        if (s.incognitoBiometricEnabled && BiometricHelper.isBiometricAvailable(getApplication())) {
+            _biometricPromptNonce.update { it + 1 }
+        } else if (s.incognitoLockEnabled) {
+            _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.UNLOCK_INCOGNITO_TABS)
+        } else {
+            _isIncognitoVaultLocked.value = false
+            _incognitoUnlocked.value = true
+        }
+    }
+
+    fun dismissDownloadBanner() {
+        _downloadBannerDismissed.value = true
+    }
+
     fun getActiveSiteCertificateSummary(): SiteCertificateSummary {
         val tab = activeTab.value
-        return webViewManager.getCertificateSummary(tab.id, tab.url)
+        val summary = webViewManager.getCertificateSummary(tab.id, tab.url)
+        return if (tab.securityState == PageSecurityState.CERT_ERROR && summary.threatWarning == null) {
+            summary.copy(threatWarning = "Warning: You proceeded past an untrusted TLS certificate on this host.")
+        } else {
+            summary
+        }
     }
 
     fun emitMessage(message: String) {
@@ -392,7 +568,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     fun navigateFromExternalIntent(url: String) {
         if (url.isBlank()) return
         val current = activeTab.value
-        if (current.isHome) {
+        if (current.isHome && !current.isIncognito) {
             navigateActiveTab(url)
         } else {
             openNewTab(isIncognito = false, initialUrl = url)
@@ -487,9 +663,18 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         _activeOverlay.value = BrowserOverlay.None
         _findInPage.value = FindInPageState()
         _barsHiddenByScroll.value = false
-        val customHome = settings.value.customHomepageUrl.trim()
-        if (!forceNovaHome && customHome.isNotEmpty() && !tab.isHome && !customHome.equals(tab.url, ignoreCase = true)) {
-            navigateActiveTab(customHome)
+        val customHomeRaw = settings.value.customHomepageUrl.trim()
+        val resolvedCustomHome = if (customHomeRaw.isNotEmpty()) {
+            UrlResolver.resolveInput(customHomeRaw, settings.value.searchEngine, settings.value.httpsOnlyMode)
+        } else {
+            ""
+        }
+        if (!forceNovaHome &&
+            resolvedCustomHome.startsWith("http") &&
+            !tab.isHome &&
+            !resolvedCustomHome.equals(tab.url, ignoreCase = true)
+        ) {
+            navigateActiveTab(resolvedCustomHome)
             return
         }
         webViewManager.stopLoading(tab.id)
@@ -513,8 +698,15 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         initialUrl: String = UrlResolver.NOVA_HOME_URL,
         parentTabId: String? = null
     ) {
-        if (isIncognito && settings.value.incognitoLockEnabled && !_incognitoUnlocked.value) {
-            _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.OPEN_INCOGNITO_TAB)
+        val s = settings.value
+        val needsLockCheck = isIncognito && !_incognitoUnlocked.value && s.incognitoLockEnabled
+        if (needsLockCheck) {
+            if (s.incognitoBiometricEnabled && BiometricHelper.isBiometricAvailable(getApplication())) {
+                _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.OPEN_INCOGNITO_TAB)
+                _biometricPromptNonce.update { it + 1 }
+            } else {
+                _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.OPEN_INCOGNITO_TAB)
+            }
             return
         }
         val previousId = _activeTabId.value
@@ -536,6 +728,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             progress = if (resolved != UrlResolver.NOVA_HOME_URL) 10 else 0,
             securityState = SecurityUtils.classifyUrlSecurity(resolved)
         )
+        if (resolved != UrlResolver.NOVA_HOME_URL) {
+            webViewManager.primeTabUrl(newTab.id, resolved)
+        }
         _tabVisitHistory.update { (it.filterNot { id -> id == previousId } + previousId).takeLast(12) }
         _tabs.update { it + newTab }
         _activeTabId.value = newTab.id
@@ -546,8 +741,14 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun selectTab(tabId: String) {
         val target = _tabs.value.firstOrNull { it.id == tabId } ?: return
-        if (target.isIncognito && settings.value.incognitoLockEnabled && !_incognitoUnlocked.value) {
-            _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.UNLOCK_INCOGNITO_TABS)
+        val s = settings.value
+        if (target.isIncognito && !_incognitoUnlocked.value && s.incognitoLockEnabled) {
+            if (s.incognitoBiometricEnabled && BiometricHelper.isBiometricAvailable(getApplication())) {
+                _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.UNLOCK_INCOGNITO_TABS)
+                _biometricPromptNonce.update { it + 1 }
+            } else {
+                _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.UNLOCK_INCOGNITO_TABS)
+            }
             return
         }
         val previousId = _activeTabId.value
@@ -555,6 +756,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             _tabVisitHistory.update { (it.filterNot { id -> id == previousId } + previousId).takeLast(12) }
         }
         _activeTabId.value = tabId
+        _isIncognitoVaultLocked.value = false
         _activeOverlay.value = BrowserOverlay.None
         _findInPage.value = FindInPageState()
         _barsHiddenByScroll.value = false
@@ -565,7 +767,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val index = currentList.indexOfFirst { it.id == tabId }
         if (index < 0) return
 
+        bypassedSslHosts.remove(tabId)
         webViewManager.destroyTab(tabId)
+        _tabVisitHistory.update { it.filterNot { id -> id == tabId } }
         val remaining = currentList.filterNot { it.id == tabId }
         if (remaining.isEmpty()) {
             val fresh = BrowserTab()
@@ -575,8 +779,10 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         } else {
             _tabs.value = remaining
             if (_activeTabId.value == tabId) {
+                val remainingIds = remaining.map { it.id }.toSet()
+                val recentTabId = _tabVisitHistory.value.lastOrNull { it in remainingIds }
                 val nextIndex = (index - 1).coerceAtLeast(0).coerceAtMost(remaining.lastIndex)
-                _activeTabId.value = remaining[nextIndex].id
+                _activeTabId.value = recentTabId ?: remaining[nextIndex].id
             }
             if (remaining.none { it.isIncognito }) {
                 _incognitoUnlocked.value = false
@@ -586,11 +792,16 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun closeAllTabs(incognitoOnly: Boolean) {
         val toClose = _tabs.value.filter { it.isIncognito == incognitoOnly }
-        toClose.forEach { webViewManager.destroyTab(it.id) }
+        val closedIds = toClose.map { it.id }.toSet()
+        toClose.forEach {
+            bypassedSslHosts.remove(it.id)
+            webViewManager.destroyTab(it.id)
+        }
+        _tabVisitHistory.update { it.filterNot { id -> id in closedIds } }
         val remaining = _tabs.value.filterNot { it.isIncognito == incognitoOnly }
         if (incognitoOnly) {
             _incognitoUnlocked.value = false
-            webViewManager.clearIncognitoSessionArtifacts()
+            webViewManager.clearIncognitoSessionArtifacts(clearPersistentIfSafe = true)
         }
         if (remaining.isEmpty()) {
             val fresh = BrowserTab()
@@ -729,16 +940,23 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         url: String,
         userAgent: String? = null,
         contentDisposition: String? = null,
-        mimeType: String? = null
+        mimeType: String? = null,
+        fromWebView: Boolean = false
     ) {
+        val currentTab = activeTab.value
+        val safeReferer = if (fromWebView && !currentTab.isIncognito) currentTab.url else null
         downloadManager.startDownload(
             url = url,
             userAgent = userAgent,
             contentDisposition = contentDisposition,
             mimeType = mimeType,
-            refererUrl = activeTab.value.url
-        ) { fileName ->
-            emitMessage("Downloading $fileName")
+            refererUrl = safeReferer
+        ) { statusMessage ->
+            if (statusMessage.startsWith("Blob ") || statusMessage.startsWith("Unsupported ")) {
+                emitMessage(statusMessage)
+            } else {
+                emitMessage("Downloading $statusMessage")
+            }
         }
     }
 
@@ -839,7 +1057,10 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun proceedUnsafeSslConnection() {
-        _sslWarning.value?.handler?.proceed()
+        val req = _sslWarning.value ?: return
+        bypassedSslHosts.getOrPut(req.tabId) { ConcurrentHashMap.newKeySet() }.add(req.host)
+        updateTab(req.tabId) { it.copy(securityState = PageSecurityState.CERT_ERROR) }
+        req.handler.proceed()
         _sslWarning.value = null
         emitMessage("Proceeding with unverified certificate")
     }
@@ -853,9 +1074,64 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             is SitePermissionPrompt.Geolocation -> {
                 prompt.callback.invoke(prompt.origin, granted, false)
             }
+            is SitePermissionPrompt.WebNotification -> {
+                viewModelScope.launch {
+                    repository.setSiteNotificationRule(
+                        host = prompt.host,
+                        allowed = granted,
+                        soundId = settings.value.siteNotificationSoundId
+                    )
+                }
+                if (prompt.tabId != null && prompt.jsCallbackId != null) {
+                    webViewManager.resolveJsNotificationPermission(prompt.tabId, prompt.jsCallbackId, granted)
+                }
+                emitMessage(
+                    if (granted) "Notifications enabled for ${prompt.host}"
+                    else "Notifications blocked for ${prompt.host}"
+                )
+            }
             null -> Unit
         }
         _sitePermissionPrompt.value = null
+    }
+
+    fun setSiteNotificationEnabled(host: String, allowed: Boolean, soundId: String = settings.value.siteNotificationSoundId) {
+        val clean = host.trim().lowercase().removePrefix("www.")
+        if (clean.isEmpty()) return
+        viewModelScope.launch {
+            if (allowed && !settings.value.notificationsEnabled) {
+                repository.setNotificationsEnabled(true)
+            }
+            repository.setSiteNotificationRule(clean, allowed, soundId)
+            emitMessage(if (allowed) "Site notifications enabled for $clean" else "Site notifications disabled for $clean")
+        }
+    }
+
+    fun setSiteNotificationSoundForHost(host: String, soundId: String) {
+        val clean = host.trim().lowercase().removePrefix("www.")
+        if (clean.isEmpty()) return
+        viewModelScope.launch {
+            val current = siteNotificationRules.value.firstOrNull { it.host == clean }
+            repository.setSiteNotificationRule(clean, current?.allowed ?: true, soundId)
+            NovaNotificationHelper.previewSound(getApplication(), NovaNotificationSound.fromId(soundId))
+        }
+    }
+
+    fun deleteSiteNotificationRule(host: String) = viewModelScope.launch {
+        repository.deleteSiteNotificationRule(host)
+    }
+
+    fun sendTestSiteNotification(host: String = "nova.browser", soundId: String = settings.value.siteNotificationSoundId) {
+        val sound = NovaNotificationSound.fromId(soundId)
+        NovaNotificationHelper.previewSound(getApplication(), sound)
+        NovaNotificationHelper.showSiteNotification(
+            context = getApplication(),
+            host = host,
+            title = "Site Alert · $host",
+            body = "Notifications active using ${sound.label} sound",
+            sound = sound,
+            targetUrl = "https://$host"
+        )
     }
 
     // File chooser resolution
@@ -867,22 +1143,111 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     // Incognito PIN Vault
     fun requestUnlockIncognitoSection() {
-        if (!settings.value.incognitoLockEnabled || _incognitoUnlocked.value) return
-        _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.UNLOCK_INCOGNITO_TABS)
+        val s = settings.value
+        if (!s.incognitoLockEnabled || _incognitoUnlocked.value) return
+        if (s.incognitoBiometricEnabled && BiometricHelper.isBiometricAvailable(getApplication())) {
+            _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.UNLOCK_INCOGNITO_TABS)
+            _biometricPromptNonce.update { it + 1 }
+        } else {
+            _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.UNLOCK_INCOGNITO_TABS)
+        }
+    }
+
+    fun requestDisableIncognitoPin() {
+        val s = settings.value
+        if (!s.incognitoLockEnabled) {
+            disableIncognitoPin()
+            return
+        }
+        _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.DISABLE_INCOGNITO_PIN)
+        if (s.incognitoBiometricEnabled && BiometricHelper.isBiometricAvailable(getApplication())) {
+            _biometricPromptNonce.update { it + 1 }
+        }
+    }
+
+    fun onBiometricUnlockSucceeded() {
+        failedPinAttempts = 0
+        pinLockoutUntilMs = 0L
+        val pendingPurpose = _incognitoPinChallenge.value?.purpose
+        _incognitoUnlocked.value = true
+        _isIncognitoVaultLocked.value = false
+        _incognitoPinChallenge.value = null
+        when (pendingPurpose) {
+            IncognitoVaultPurpose.OPEN_INCOGNITO_TAB -> {
+                openNewTab(isIncognito = true)
+                emitMessage("Private Vault unlocked")
+            }
+            IncognitoVaultPurpose.DISABLE_INCOGNITO_PIN -> {
+                disableIncognitoPin()
+            }
+            else -> emitMessage("Private Vault unlocked")
+        }
+    }
+
+    fun onBiometricFallbackToPin() {
+        val s = settings.value
+        if (s.incognitoLockEnabled) {
+            if (_incognitoPinChallenge.value == null) {
+                _incognitoPinChallenge.value = IncognitoPinChallenge(IncognitoVaultPurpose.UNLOCK_INCOGNITO_TABS)
+            }
+        }
+    }
+
+    fun exitLockedIncognitoToNormalTab() {
+        val normal = _tabs.value.firstOrNull { !it.isIncognito }
+        _isIncognitoVaultLocked.value = false
+        _incognitoPinChallenge.value = null
+        if (normal != null) {
+            _activeTabId.value = normal.id
+        } else {
+            openNewTab(isIncognito = false)
+        }
     }
 
     fun submitIncognitoPin(pin: String) {
         val s = settings.value
-        val challenge = _incognitoPinChallenge.value ?: return
+        val challenge = _incognitoPinChallenge.value ?: IncognitoPinChallenge(IncognitoVaultPurpose.UNLOCK_INCOGNITO_TABS)
+        val now = System.currentTimeMillis()
+        if (now < pinLockoutUntilMs) {
+            val remainingSec = ((pinLockoutUntilMs - now) / 1000L).coerceAtLeast(1L)
+            _incognitoPinChallenge.value = challenge.copy(
+                errorMessage = "Too many attempts. Try again in ${remainingSec}s."
+            )
+            return
+        }
+
         if (SecurityUtils.verifyPin(pin, s.incognitoPinHash, s.incognitoPinSalt)) {
+            failedPinAttempts = 0
+            pinLockoutUntilMs = 0L
             _incognitoUnlocked.value = true
+            _isIncognitoVaultLocked.value = false
             _incognitoPinChallenge.value = null
-            if (challenge.purpose == IncognitoVaultPurpose.OPEN_INCOGNITO_TAB) {
-                openNewTab(isIncognito = true)
+            when (challenge.purpose) {
+                IncognitoVaultPurpose.OPEN_INCOGNITO_TAB -> {
+                    openNewTab(isIncognito = true)
+                    emitMessage("Private Vault unlocked")
+                }
+                IncognitoVaultPurpose.UNLOCK_INCOGNITO_TABS -> {
+                    emitMessage("Private Vault unlocked")
+                }
+                IncognitoVaultPurpose.DISABLE_INCOGNITO_PIN -> {
+                    disableIncognitoPin()
+                }
             }
-            emitMessage("Private Vault unlocked")
         } else {
-            _incognitoPinChallenge.value = challenge.copy(errorMessage = "Incorrect PIN. Try again.")
+            failedPinAttempts++
+            if (failedPinAttempts >= 5) {
+                pinLockoutUntilMs = now + 30_000L
+                failedPinAttempts = 0
+                _incognitoPinChallenge.value = challenge.copy(
+                    errorMessage = "Too many failed attempts. Wait 30 seconds."
+                )
+            } else {
+                val left = 5 - failedPinAttempts
+                _incognitoPinChallenge.value = challenge.copy(
+                    errorMessage = "Incorrect PIN ($left attempts remaining)."
+                )
+            }
         }
     }
 
@@ -899,33 +1264,132 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             val salt = SecurityUtils.generateSalt()
             val hash = SecurityUtils.hashPin(pin, salt)
             repository.setIncognitoPin(hash, salt)
+            failedPinAttempts = 0
+            pinLockoutUntilMs = 0L
             _incognitoUnlocked.value = true
+            _isIncognitoVaultLocked.value = false
             emitMessage("Private tab PIN lock enabled")
         }
     }
 
-    fun disableIncognitoPin() = viewModelScope.launch {
+    private fun disableIncognitoPin() = viewModelScope.launch {
         repository.clearIncognitoPin()
+        failedPinAttempts = 0
+        pinLockoutUntilMs = 0L
         _incognitoUnlocked.value = true
+        _isIncognitoVaultLocked.value = false
         emitMessage("Private tab PIN lock disabled")
     }
 
     // VPN Controls
     fun startVpnConnection() {
         val s = settings.value
-        NovaVpnService.startConnect(getApplication(), s.vpnDnsServer, s.vpnGatewayAddress)
+        NovaVpnService.startConnect(
+            context = getApplication(),
+            dnsServer = s.vpnDnsServer,
+            gateway = s.vpnGatewayAddress,
+            netShieldEnabled = s.vpnNetShieldEnabled,
+            dohEnabled = s.vpnDohEnabled
+        )
     }
 
     fun stopVpnConnection() {
         NovaVpnService.startDisconnect(getApplication())
     }
 
+    fun setVpnNetShieldEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setVpnNetShieldEnabled(enabled)
+            if (vpnState.value.status == VpnConnectionStatus.CONNECTED_LOCAL_TUN) {
+                val s = settings.value
+                NovaVpnService.startConnect(
+                    context = getApplication(),
+                    dnsServer = s.vpnDnsServer,
+                    gateway = s.vpnGatewayAddress,
+                    netShieldEnabled = enabled,
+                    dohEnabled = s.vpnDohEnabled
+                )
+            }
+            emitMessage(if (enabled) "VPN NetShield Ad & Tracker Filter enabled" else "VPN NetShield paused")
+        }
+    }
+
+    fun setVpnDohEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setVpnDohEnabled(enabled)
+            if (vpnState.value.status == VpnConnectionStatus.CONNECTED_LOCAL_TUN) {
+                val s = settings.value
+                NovaVpnService.startConnect(
+                    context = getApplication(),
+                    dnsServer = s.vpnDnsServer,
+                    gateway = s.vpnGatewayAddress,
+                    netShieldEnabled = s.vpnNetShieldEnabled,
+                    dohEnabled = enabled
+                )
+            }
+            emitMessage(if (enabled) "Encrypted DNS-over-HTTPS (DoH) enabled" else "Switched to standard UDP DNS")
+        }
+    }
+
+    fun checkVpnPublicIp() {
+        if (_vpnPublicIp.value.isChecking) return
+        _vpnPublicIp.update { it.copy(isChecking = true, errorMessage = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                val req = Request.Builder().url("https://ipwho.is/").build()
+                vpnIpClient.newCall(req).execute().use { resp ->
+                    val body = resp.body?.string().orEmpty()
+                    val json = JSONObject(body)
+                    if (resp.isSuccessful && json.optBoolean("success", true)) {
+                        val ip = json.optString("ip", "")
+                        val country = json.optString("country", "")
+                        val isp = json.optJSONObject("connection")?.optString("isp", "").orEmpty()
+                        if (ip.isNotBlank()) {
+                            return@runCatching VpnPublicIpState(
+                                isChecking = false,
+                                ipAddress = ip,
+                                country = country,
+                                isp = isp
+                            )
+                        }
+                    }
+                    null
+                }
+            }.getOrNull() ?: runCatching {
+                val req = Request.Builder().url("https://api.ipify.org?format=json").build()
+                vpnIpClient.newCall(req).execute().use { resp ->
+                    val json = JSONObject(resp.body?.string().orEmpty())
+                    val ip = json.optString("ip", "")
+                    if (resp.isSuccessful && ip.isNotBlank()) {
+                        VpnPublicIpState(isChecking = false, ipAddress = ip)
+                    } else null
+                }
+            }.getOrNull()
+
+            _vpnPublicIp.value = result ?: VpnPublicIpState(
+                isChecking = false,
+                errorMessage = "Unable to check exit IP right now. Verify internet connection."
+            )
+        }
+    }
+
     // Settings updates
     fun updateThemeMode(mode: AppThemeMode) = viewModelScope.launch { repository.updateThemeMode(mode) }
     fun updateSearchEngine(engine: SearchEngine) = viewModelScope.launch { repository.updateSearchEngine(engine) }
     fun updateCustomHomepage(url: String) = viewModelScope.launch {
-        repository.updateCustomHomepage(url)
-        emitMessage(if (url.isBlank()) "Homepage reset to NOVA Liquid Glass" else "Custom homepage saved")
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) {
+            repository.updateCustomHomepage("")
+            emitMessage("Homepage reset to NOVA Liquid Glass")
+            return@launch
+        }
+        val resolved = UrlResolver.resolveInput(trimmed, settings.value.searchEngine, settings.value.httpsOnlyMode)
+        if (!resolved.startsWith("http://") && !resolved.startsWith("https://")) {
+            emitMessage("Enter a valid http:// or https:// website address")
+            return@launch
+        }
+        repository.updateCustomHomepage(resolved)
+        emitMessage("Custom homepage saved")
     }
     fun setHttpsOnlyMode(enabled: Boolean) = viewModelScope.launch { repository.setHttpsOnlyMode(enabled) }
     fun setCookiesEnabled(enabled: Boolean) = viewModelScope.launch { repository.setCookiesEnabled(enabled) }
@@ -946,6 +1410,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     fun setAllowMicSites(enabled: Boolean) = viewModelScope.launch { repository.setAllowMicSites(enabled) }
     fun setAllowLocationSites(enabled: Boolean) = viewModelScope.launch { repository.setAllowLocationSites(enabled) }
     fun setNotificationsEnabled(enabled: Boolean) = viewModelScope.launch { repository.setNotificationsEnabled(enabled) }
+    fun setSiteNotificationSound(soundId: String) = viewModelScope.launch { repository.setSiteNotificationSound(soundId) }
+    fun setIncognitoBiometricEnabled(enabled: Boolean) = viewModelScope.launch { repository.setIncognitoBiometricEnabled(enabled) }
     fun setVpnDnsServer(dns: String) = viewModelScope.launch { repository.setVpnDnsServer(dns) }
     fun setVpnGatewayAddress(address: String) = viewModelScope.launch { repository.setVpnGatewayAddress(address) }
 

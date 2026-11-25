@@ -104,6 +104,21 @@ object SecurityUtils {
         )
     }
 
+    /**
+     * Validates a numeric IPv4 or IPv6 DNS address without performing blocking DNS resolution.
+     */
+    fun isValidIpAddress(address: String): Boolean {
+        val trimmed = address.trim()
+        if (trimmed.isEmpty()) return false
+        val ipv4 = Regex("^((25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\.){3}(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)$")
+        if (ipv4.matches(trimmed)) return true
+        // Basic IPv6 literal validation (contains colons and valid hex/groups, no spaces or hostname chars)
+        return trimmed.contains(':') &&
+            !trimmed.contains(' ') &&
+            Regex("^[0-9a-fA-F:]+$").matches(trimmed) &&
+            trimmed.count { it == ':' } in 2..7
+    }
+
     private fun ByteArray.toHexString(): String {
         val hexChars = "0123456789abcdef"
         val sb = StringBuilder(size * 2)

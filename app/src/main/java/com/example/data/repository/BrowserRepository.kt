@@ -7,6 +7,7 @@ import com.example.data.local.HistoryEntity
 import com.example.data.local.NovaDatabase
 import com.example.data.local.QuickNoteEntity
 import com.example.data.local.ShortcutEntity
+import com.example.data.local.SiteNotificationRuleEntity
 import com.example.data.preferences.BrowserPreferences
 import com.example.data.preferences.BrowserSettings
 import com.example.data.preferences.SearchEngine
@@ -24,6 +25,8 @@ class BrowserRepository(
     val quickNotes: Flow<List<QuickNoteEntity>> = database.quickNoteDao().getAllNotes()
     val adBlockRules: Flow<List<AdBlockRuleEntity>> = database.adBlockRuleDao().getAllRules()
     val shortcuts: Flow<List<ShortcutEntity>> = database.shortcutDao().getAllShortcuts()
+    val siteNotificationRules: Flow<List<SiteNotificationRuleEntity>> =
+        database.siteNotificationRuleDao().getAllRules()
 
     suspend fun ensureDefaultShortcuts() {
         if (database.shortcutDao().count() == 0) {
@@ -65,6 +68,7 @@ class BrowserRepository(
 
     suspend fun recordHistory(title: String, url: String) {
         if (url.isBlank() || url.startsWith("about:") || url.startsWith("nova:")) return
+        database.historyDao().deleteByUrl(url)
         database.historyDao().insert(
             HistoryEntity(
                 title = title.ifBlank { url },
@@ -83,7 +87,8 @@ class BrowserRepository(
 
     suspend fun addAdBlockRule(pattern: String, isAllowlist: Boolean) {
         val normalized = pattern.trim().lowercase()
-        if (normalized.isNotEmpty()) {
+            .let { if (isAllowlist) it.removePrefix("www.") else it }
+        if (normalized.isNotEmpty() && database.adBlockRuleDao().getByPattern(normalized, isAllowlist) == null) {
             database.adBlockRuleDao().insert(
                 AdBlockRuleEntity(pattern = normalized, isAllowlist = isAllowlist)
             )
@@ -112,6 +117,34 @@ class BrowserRepository(
 
     suspend fun deleteDownload(id: Long) = database.downloadDao().deleteById(id)
 
+    suspend fun getSiteNotificationRule(host: String): SiteNotificationRuleEntity? {
+        val clean = host.trim().lowercase().removePrefix("www.")
+        if (clean.isEmpty()) return null
+        return database.siteNotificationRuleDao().getByHost(clean)
+    }
+
+    suspend fun setSiteNotificationRule(host: String, allowed: Boolean, soundId: String) {
+        val clean = host.trim().lowercase().removePrefix("www.")
+        if (clean.isEmpty()) return
+        val existing = database.siteNotificationRuleDao().getByHost(clean)
+        database.siteNotificationRuleDao().upsert(
+            SiteNotificationRuleEntity(
+                id = existing?.id ?: 0L,
+                host = clean,
+                allowed = allowed,
+                soundId = soundId,
+                updatedAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    suspend fun deleteSiteNotificationRule(host: String) {
+        val clean = host.trim().lowercase().removePrefix("www.")
+        if (clean.isNotEmpty()) {
+            database.siteNotificationRuleDao().deleteByHost(clean)
+        }
+    }
+
     // Settings delegates
     suspend fun updateThemeMode(mode: AppThemeMode) = preferences.updateThemeMode(mode)
     suspend fun updateSearchEngine(engine: SearchEngine) = preferences.updateSearchEngine(engine)
@@ -131,8 +164,12 @@ class BrowserRepository(
     suspend fun setAllowMicSites(enabled: Boolean) = preferences.setAllowMicSites(enabled)
     suspend fun setAllowLocationSites(enabled: Boolean) = preferences.setAllowLocationSites(enabled)
     suspend fun setNotificationsEnabled(enabled: Boolean) = preferences.setNotificationsEnabled(enabled)
+    suspend fun setSiteNotificationSound(soundId: String) = preferences.setSiteNotificationSound(soundId)
+    suspend fun setIncognitoBiometricEnabled(enabled: Boolean) = preferences.setIncognitoBiometricEnabled(enabled)
     suspend fun setIncognitoPin(hash: String, salt: String) = preferences.setIncognitoPin(hash, salt)
     suspend fun clearIncognitoPin() = preferences.clearIncognitoPin()
     suspend fun setVpnDnsServer(dns: String) = preferences.setVpnDnsServer(dns)
     suspend fun setVpnGatewayAddress(address: String) = preferences.setVpnGatewayAddress(address)
+    suspend fun setVpnNetShieldEnabled(enabled: Boolean) = preferences.setVpnNetShieldEnabled(enabled)
+    suspend fun setVpnDohEnabled(enabled: Boolean) = preferences.setVpnDohEnabled(enabled)
 }

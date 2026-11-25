@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,6 +27,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Info
@@ -37,7 +41,6 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.VpnLock
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -64,10 +67,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.example.data.local.SiteNotificationRuleEntity
 import com.example.data.preferences.BrowserSettings
 import com.example.data.preferences.SearchEngine
 import com.example.engine.ChromiumEngineInfo
+import com.example.notifications.NovaNotificationSound
 import com.example.ui.components.BrowserBarLayoutPreview
+import com.example.ui.components.GlassIconButton
 import com.example.ui.components.GlassPillChip
 import com.example.ui.components.LiquidGlassSurface
 import com.example.ui.theme.AppThemeMode
@@ -77,12 +83,15 @@ import com.example.vpn.VpnConnectionStatus
 import com.example.vpn.VpnRuntimeState
 import kotlin.math.roundToInt
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     settings: BrowserSettings,
     vpnState: VpnRuntimeState,
     chromiumInfo: ChromiumEngineInfo,
     isIncognito: Boolean,
+    biometricAvailable: Boolean,
+    siteNotificationRules: List<SiteNotificationRuleEntity>,
     onUpdateTheme: (AppThemeMode) -> Unit,
     onUpdateSearchEngine: (SearchEngine) -> Unit,
     onUpdateCustomHomepage: (String) -> Unit,
@@ -100,12 +109,18 @@ fun SettingsScreen(
     onSetAllowMic: (Boolean) -> Unit,
     onSetAllowLocation: (Boolean) -> Unit,
     onSetNotifications: (Boolean) -> Unit,
+    onSetSiteNotificationSound: (String) -> Unit,
+    onToggleSiteNotificationRule: (host: String, allowed: Boolean) -> Unit,
+    onDeleteSiteNotificationRule: (host: String) -> Unit,
+    onTestNotificationSound: (String) -> Unit,
+    onSetIncognitoBiometric: (Boolean) -> Unit,
     onSetupIncognitoPin: (String) -> Unit,
-    onDisableIncognitoPin: () -> Unit,
+    onRequestDisableIncognitoPin: () -> Unit,
     onClearAllBrowsingData: () -> Unit,
     onOpenAdBlockDashboard: () -> Unit,
     onOpenVpnSettings: () -> Unit,
     onOpenDownloads: () -> Unit,
+    onSuppressNextBackgroundLock: () -> Unit = {},
     onShowMessage: (String) -> Unit,
     onBack: () -> Unit
 ) {
@@ -301,6 +316,16 @@ fun SettingsScreen(
                         checked = settings.popupBlockingEnabled,
                         onCheckedChange = onSetPopupBlocking
                     )
+                    SettingsToggleRow(
+                        title = "Fingerprint Unlock (Private Vault)",
+                        subtitle = if (biometricAvailable) {
+                            "Auto-lock Incognito on background & unlock with Fingerprint or PIN"
+                        } else {
+                            "Biometric hardware not enrolled on this device (uses PIN fallback)"
+                        },
+                        checked = settings.incognitoBiometricEnabled,
+                        onCheckedChange = onSetIncognitoBiometric
+                    )
 
                     Spacer(modifier = Modifier.height(10.dp))
                     Row(
@@ -309,7 +334,7 @@ fun SettingsScreen(
                     ) {
                         OutlinedButton(
                             onClick = {
-                                if (settings.incognitoLockEnabled) onDisableIncognitoPin()
+                                if (settings.incognitoLockEnabled) onRequestDisableIncognitoPin()
                                 else showPinSetupDialog = true
                             },
                             modifier = Modifier
@@ -384,6 +409,7 @@ fun SettingsScreen(
                                     Intent(Settings.ACTION_SECURITY_SETTINGS)
                                 }
                                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                onSuppressNextBackgroundLock()
                                 context.startActivity(intent)
                             }.onFailure {
                                 onShowMessage("Unable to open Install Unknown Apps settings.")
@@ -415,17 +441,84 @@ fun SettingsScreen(
                         onCheckedChange = onSetAllowLocation
                     )
                     SettingsToggleRow(
-                        title = "Browser Notifications",
-                        subtitle = "Allow download and browser status alerts",
+                        title = "Browser & Site Notifications",
+                        subtitle = "Allow enabled websites and download alerts with distinct chime sounds",
                         checked = settings.notificationsEnabled,
                         onCheckedChange = { enable ->
                             if (enable && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                onSuppressNextBackgroundLock()
                                 notificationPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                             } else {
                                 onSetNotifications(enable)
                             }
                         }
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Site Notification Chime Sound",
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        NovaNotificationSound.entries.forEach { sound ->
+                            GlassPillChip(
+                                label = sound.label,
+                                active = settings.siteNotificationSoundId == sound.id,
+                                onClick = { onSetSiteNotificationSound(sound.id) }
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { onTestNotificationSound(settings.siteNotificationSoundId) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.AutoMirrored.Rounded.VolumeUp, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Preview & Test Notification Sound")
+                    }
+
+                    if (siteNotificationRules.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Enabled / Configured Websites",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        siteNotificationRules.forEach { rule ->
+                            val soundLabel = NovaNotificationSound.fromId(rule.soundId).label
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(text = rule.host, style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        text = if (rule.allowed) "Allowed · $soundLabel" else "Blocked",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = rule.allowed,
+                                    onCheckedChange = { onToggleSiteNotificationRule(rule.host, it) }
+                                )
+                                GlassIconButton(
+                                    icon = Icons.Rounded.Delete,
+                                    contentDescription = "Remove rule",
+                                    onClick = { onDeleteSiteNotificationRule(rule.host) },
+                                    iconSize = 18.dp
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -443,10 +536,12 @@ fun SettingsScreen(
                                     if (roleManager != null && roleManager.isRoleAvailable(RoleManager.ROLE_BROWSER) &&
                                         !roleManager.isRoleHeld(RoleManager.ROLE_BROWSER)
                                     ) {
+                                        onSuppressNextBackgroundLock()
                                         defaultBrowserLauncher.launch(roleManager.createRequestRoleIntent(RoleManager.ROLE_BROWSER))
                                         return@SettingsNavRow
                                     }
                                 }
+                                onSuppressNextBackgroundLock()
                                 context.startActivity(
                                     Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 )
@@ -483,38 +578,49 @@ fun SettingsScreen(
         var confirmPin by remember { mutableStateOf("") }
         var error by remember { mutableStateOf<String?>(null) }
 
-        AlertDialog(
-            onDismissRequest = { showPinSetupDialog = false },
-            title = { Text("Set Private Tab PIN") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        text = "Your PIN is stored using salted iterative SHA-256 hashing and never saved in plaintext.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = pin,
-                        onValueChange = { if (it.length <= 8) pin = it.filter(Char::isDigit) },
-                        label = { Text("Enter PIN (4–8 digits)") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = confirmPin,
-                        onValueChange = { if (it.length <= 8) confirmPin = it.filter(Char::isDigit) },
-                        label = { Text("Confirm PIN") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                        singleLine = true
-                    )
-                    if (error != null) {
-                        Text(error!!, color = CoralDanger, style = MaterialTheme.typography.bodySmall)
-                    }
+        LiquidGlassModalDialog(onDismissRequest = { showPinSetupDialog = false }) {
+            Text("Set Private Tab PIN", style = MaterialTheme.typography.titleLarge)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Your PIN is stored using salted iterative SHA-256 hashing and never saved in plaintext.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedTextField(
+                value = pin,
+                onValueChange = { if (it.length <= 8) pin = it.filter(Char::isDigit) },
+                label = { Text("Enter PIN (4–8 digits)") },
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedTextField(
+                value = confirmPin,
+                onValueChange = { if (it.length <= 8) confirmPin = it.filter(Char::isDigit) },
+                label = { Text("Confirm PIN") },
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            if (error != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(error!!, color = CoralDanger, style = MaterialTheme.typography.bodySmall)
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                TextButton(
+                    onClick = { showPinSetupDialog = false },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Cancel")
                 }
-            },
-            confirmButton = {
                 Button(
                     onClick = {
                         when {
@@ -525,36 +631,46 @@ fun SettingsScreen(
                                 showPinSetupDialog = false
                             }
                         }
-                    }
+                    },
+                    modifier = Modifier.weight(1f)
                 ) {
                     Text("Enable Lock")
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showPinSetupDialog = false }) { Text("Cancel") }
             }
-        )
+        }
     }
 
     if (showClearDataDialog) {
-        AlertDialog(
-            onDismissRequest = { showClearDataDialog = false },
-            title = { Text("Clear All Browsing Data?") },
-            text = { Text("Removes browsing history, WebView cache, site cookies, and WebStorage.") },
-            confirmButton = {
+        LiquidGlassModalDialog(onDismissRequest = { showClearDataDialog = false }) {
+            Text("Clear All Browsing Data?", style = MaterialTheme.typography.titleLarge)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Removes browsing history, WebView cache, site cookies, and WebStorage.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                TextButton(
+                    onClick = { showClearDataDialog = false },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Cancel")
+                }
                 Button(
                     onClick = {
                         onClearAllBrowsingData()
                         showClearDataDialog = false
-                    }
+                    },
+                    modifier = Modifier.weight(1f)
                 ) {
                     Text("Clear Now")
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearDataDialog = false }) { Text("Cancel") }
             }
-        )
+        }
     }
 }
 

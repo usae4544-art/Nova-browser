@@ -15,4 +15,10 @@
 .cxx
 local.properties
 .env
+*.keystore
+*.jks
+*.p12
+*.apk
+*.ap_
+*.aab
 debug.keystore

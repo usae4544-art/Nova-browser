@@ -36,6 +36,9 @@ interface HistoryDao {
     @Query("DELETE FROM history WHERE id = :id")
     suspend fun deleteById(id: Long)
 
+    @Query("DELETE FROM history WHERE url = :url")
+    suspend fun deleteByUrl(url: String)
+
     @Query("DELETE FROM history")
     suspend fun clearAll()
 }
@@ -87,6 +90,9 @@ interface AdBlockRuleDao {
     @Query("SELECT * FROM adblock_rules ORDER BY createdAt DESC")
     fun getAllRules(): Flow<List<AdBlockRuleEntity>>
 
+    @Query("SELECT * FROM adblock_rules WHERE pattern = :pattern AND isAllowlist = :isAllowlist LIMIT 1")
+    suspend fun getByPattern(pattern: String, isAllowlist: Boolean): AdBlockRuleEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(rule: AdBlockRuleEntity): Long
 
@@ -116,4 +122,19 @@ interface ShortcutDao {
 
     @Query("DELETE FROM shortcuts WHERE id = :id")
     suspend fun deleteById(id: Long)
+}
+
+@Dao
+interface SiteNotificationRuleDao {
+    @Query("SELECT * FROM site_notification_rules ORDER BY updatedAt DESC")
+    fun getAllRules(): Flow<List<SiteNotificationRuleEntity>>
+
+    @Query("SELECT * FROM site_notification_rules WHERE host = :host LIMIT 1")
+    suspend fun getByHost(host: String): SiteNotificationRuleEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(rule: SiteNotificationRuleEntity): Long
+
+    @Query("DELETE FROM site_notification_rules WHERE host = :host")
+    suspend fun deleteByHost(host: String)
 }
