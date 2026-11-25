@@ -399,7 +399,7 @@ class NovaBrowserUnitTest {
 
     @Test
     fun `sakuga VFX controller spawns typewriter ink accents and bottom tap waves`() {
-        val controller = SakugaVfxController()
+        val controller = SakugaVfxController(reducedMotion = false)
 
         controller.triggerTypewriterKeyAccent(Offset(180f, 600f))
         assertTrue(controller.hasActiveEffects)

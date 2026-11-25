@@ -590,10 +590,10 @@ class NovaDownloadManager(
 
         private val explicitMimeMap = mapOf(
             "apk" to APK_MIME_TYPE,
-            "apks" to "application/zip",
-            "xapk" to "application/zip",
             "pdf" to "application/pdf",
             "zip" to "application/zip",
+            "apks" to "application/zip",
+            "xapk" to "application/zip",
             "rar" to "application/vnd.rar",
             "7z" to "application/x-7z-compressed",
             "mp4" to "video/mp4",

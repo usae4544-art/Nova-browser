@@ -51,7 +51,9 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run JVM Unit Tests
-        run: ./gradlew testDebugUnitTest --continue || true
+        run: |
+          ./gradlew testDebugUnitTest --no-daemon --stacktrace
+          grep -h "<testsuite " app/build/test-results/testDebugUnitTest/*.xml || true
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --no-daemon --stacktrace
@@ -74,6 +76,7 @@ jobs:
           retention-days: 14
 
       - name: Publish or Update GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
