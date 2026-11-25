@@ -35,7 +35,10 @@ data class NovaGlassColors(
     val chipActiveBg: Color,
     val isDark: Boolean,
     val isIncognito: Boolean
-)
+) {
+    val glassBorder: Color get() = glassBorderTop
+    val glassBorderStrong: Color get() = glassBorderTop.copy(alpha = (glassBorderTop.alpha * 1.5f).coerceAtMost(1f))
+}
 
 val LocalNovaGlassColors = compositionLocalOf {
     NovaGlassColors(

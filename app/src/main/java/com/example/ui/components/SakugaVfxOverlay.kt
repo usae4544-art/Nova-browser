@@ -859,9 +859,9 @@ class SakugaVfxController(
         if (reducedMotion) return
         val c = toLocal(rootCenter)
         addParticle(
-            BurstRingParticle(
-                cx = c.x,
-                cy = c.y,
+            RingParticle(
+                x = c.x,
+                y = c.y,
                 rxDp = 32f,
                 ryDp = 12f,
                 widthDp = 3.6f,

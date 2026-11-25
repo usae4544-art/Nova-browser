@@ -51,6 +51,7 @@ import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.PrivacyTip
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.VpnLock
@@ -105,6 +106,7 @@ import com.example.ui.components.GlassPillChip
 import com.example.ui.components.IphoneLiquidGlassPill
 import com.example.ui.components.LiquidEdgeBlurLazyRow
 import com.example.ui.components.LiquidGlassSurface
+import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.CoralDanger
 import com.example.ui.theme.IncognitoAccent
 import com.example.ui.theme.LocalNovaGlassColors
