@@ -40,6 +40,7 @@ import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.VpnLock
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -121,6 +122,8 @@ fun SettingsScreen(
     onOpenVpnSettings: () -> Unit,
     onOpenDownloads: () -> Unit,
     onSuppressNextBackgroundLock: () -> Unit = {},
+    isCheckingForUpdates: Boolean = false,
+    onCheckForUpdates: () -> Unit = {},
     onShowMessage: (String) -> Unit,
     onBack: () -> Unit
 ) {
@@ -552,8 +555,22 @@ fun SettingsScreen(
                     )
 
                     Spacer(modifier = Modifier.height(10.dp))
+                    val installedVersion = remember(context) {
+                        runCatching {
+                            val pkg = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                context.packageManager.getPackageInfo(
+                                    context.packageName,
+                                    android.content.pm.PackageManager.PackageInfoFlags.of(0L)
+                                )
+                            } else {
+                                @Suppress("DEPRECATION")
+                                context.packageManager.getPackageInfo(context.packageName, 0)
+                            }
+                            pkg.versionName ?: "1.0.2"
+                        }.getOrDefault("1.0.2")
+                    }
                     Text(
-                        text = "Nova Browser v1.0",
+                        text = "Nova Browser v$installedVersion",
                         style = MaterialTheme.typography.titleSmall
                     )
                     Text(
@@ -567,6 +584,13 @@ fun SettingsScreen(
                         text = chromiumInfo.limitationsNote,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SettingsNavRow(
+                        icon = Icons.Rounded.SystemUpdate,
+                        title = if (isCheckingForUpdates) "Checking GitHub Releases..." else "Check for App Updates",
+                        subtitle = "Checks usae4544-art/Nova-browser releases for new builds",
+                        onClick = onCheckForUpdates
                     )
                 }
             }

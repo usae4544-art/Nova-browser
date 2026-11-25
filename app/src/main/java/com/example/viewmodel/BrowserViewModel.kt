@@ -24,8 +24,10 @@ import com.example.downloads.OpenFileOutcome
 import com.example.data.local.DownloadStatus
 import com.example.engine.AdBlockEngine
 import com.example.engine.AdBlockStats
+import com.example.engine.AppUpdateInfo
 import com.example.engine.BiometricHelper
 import com.example.engine.ChromiumEngineInfo
+import com.example.engine.GitHubUpdateChecker
 import com.example.engine.PageSecurityState
 import com.example.engine.SecurityUtils
 import com.example.engine.SiteCertificateSummary
@@ -41,6 +43,7 @@ import com.example.vpn.VpnConnectionStatus
 import com.example.vpn.VpnRuntimeState
 import com.example.vpn.VpnStateHolder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -52,6 +55,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -128,6 +132,15 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             .build()
     }
     val completedDownloads: SharedFlow<DownloadEntity> = downloadManager.completedDownloads
+
+    private val _availableAppUpdate = MutableStateFlow<AppUpdateInfo?>(null)
+    val availableAppUpdate: StateFlow<AppUpdateInfo?> = _availableAppUpdate.asStateFlow()
+
+    private val _isCheckingForUpdates = MutableStateFlow(false)
+    val isCheckingForUpdates: StateFlow<Boolean> = _isCheckingForUpdates.asStateFlow()
+
+    private var autoInstallUpdateUrl: String? = null
+    private var dismissedUpdateTagThisSession: String? = null
 
     private val initialTab = BrowserTab()
     private val _tabs = MutableStateFlow(listOf(initialTab))
@@ -235,6 +248,23 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     init {
         viewModelScope.launch {
             repository.ensureDefaultShortcuts()
+        }
+
+        // Automatically open Package Installer once an in-app GitHub APK update finishes downloading
+        viewModelScope.launch {
+            downloadManager.completedDownloads.collect { finished ->
+                val targetUrl = autoInstallUpdateUrl
+                if (targetUrl != null && finished.url == targetUrl) {
+                    autoInstallUpdateUrl = null
+                    openDownloadedFile(finished)
+                }
+            }
+        }
+
+        // Non-blocking startup GitHub Release check after UI settles cleanly
+        viewModelScope.launch {
+            delay(1800L)
+            checkForAppUpdates(silent = true)
         }
 
         // Automatically surface the animated Liquid Glass Live Download Card when any download starts
@@ -1371,6 +1401,64 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 errorMessage = "Unable to check exit IP right now. Verify internet connection."
             )
         }
+    }
+
+    private fun installedAppVersionName(): String {
+        val ctx = getApplication<Application>()
+        return runCatching {
+            val info = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                ctx.packageManager.getPackageInfo(
+                    ctx.packageName,
+                    android.content.pm.PackageManager.PackageInfoFlags.of(0L)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+            }
+            info.versionName ?: "1.0.2"
+        }.getOrDefault("1.0.2")
+    }
+
+    fun checkForAppUpdates(silent: Boolean = false) {
+        if (_isCheckingForUpdates.value) return
+        _isCheckingForUpdates.value = true
+        viewModelScope.launch {
+            val currentVersion = installedAppVersionName()
+            val result = withContext(Dispatchers.IO) {
+                GitHubUpdateChecker.fetchLatestUpdate(currentVersion)
+            }
+            _isCheckingForUpdates.value = false
+            result.onSuccess { update ->
+                if (update != null) {
+                    if (!silent || dismissedUpdateTagThisSession != update.releaseTag) {
+                        _availableAppUpdate.value = update
+                    }
+                } else if (!silent) {
+                    emitMessage("Nova Browser v$currentVersion is already up to date")
+                }
+            }.onFailure {
+                if (!silent) {
+                    emitMessage("Could not check GitHub updates right now")
+                }
+            }
+        }
+    }
+
+    fun dismissAvailableUpdate() {
+        dismissedUpdateTagThisSession = _availableAppUpdate.value?.releaseTag
+        _availableAppUpdate.value = null
+    }
+
+    fun startAppUpdateInstall(info: AppUpdateInfo) {
+        _availableAppUpdate.value = null
+        autoInstallUpdateUrl = info.apkDownloadUrl
+        downloadManager.startDownload(
+            url = info.apkDownloadUrl,
+            mimeType = "application/vnd.android.package-archive",
+            onStarted = { fileName ->
+                emitMessage("Downloading update $fileName...")
+            }
+        )
     }
 
     // Settings updates

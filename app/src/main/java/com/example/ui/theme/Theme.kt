@@ -10,9 +10,9 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -37,7 +37,7 @@ data class NovaGlassColors(
     val isIncognito: Boolean
 )
 
-val LocalNovaGlassColors = staticCompositionLocalOf {
+val LocalNovaGlassColors = compositionLocalOf {
     NovaGlassColors(
         glassSurface = Color(0x52121836),
         glassSurfaceStrong = Color(0x88101630),
@@ -140,11 +140,11 @@ fun NovaBrowserTheme(
 ) {
     val useDark = resolveEffectiveDarkTheme(themeMode = themeMode, isIncognito = isIncognito)
 
-    // Keep Android status bar and navigation bar icon contrast synced with Light/Dark Liquid Glass theme
+    // Keep Android status bar and navigation bar icon contrast synced cleanly on theme change only
     val view = LocalView.current
     if (!view.isInEditMode) {
-        SideEffect {
-            val window = (view.context as? Activity)?.window ?: return@SideEffect
+        LaunchedEffect(useDark) {
+            val window = (view.context as? Activity)?.window ?: return@LaunchedEffect
             val insetsController = WindowCompat.getInsetsController(window, view)
             insetsController.isAppearanceLightStatusBars = !useDark
             insetsController.isAppearanceLightNavigationBars = !useDark
@@ -196,7 +196,7 @@ fun NovaBrowserTheme(
         )
     }
 
-    val animSpec = tween<Color>(durationMillis = 320)
+    val animSpec = tween<Color>(durationMillis = 150)
     val animatedSurface by animateColorAsState(targetGlass.glassSurface, animSpec, label = "glass_surface")
     val animatedSurfaceStrong by animateColorAsState(targetGlass.glassSurfaceStrong, animSpec, label = "glass_strong")
     val animatedBorderTop by animateColorAsState(targetGlass.glassBorderTop, animSpec, label = "glass_border_top")

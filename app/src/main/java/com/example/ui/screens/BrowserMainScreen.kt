@@ -239,16 +239,13 @@ fun BrowserMainScreen(
     }
 
     val overlayBlurDp by animateDpAsState(
-        targetValue = if (hasOverlayOpen) 28.dp else 0.dp,
-        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+        targetValue = if (hasOverlayOpen) 20.dp else 0.dp,
+        animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
         label = "overlay_content_blur"
     )
     val overlayDepthScale by animateFloatAsState(
-        targetValue = if (hasOverlayOpen) 0.96f else 1f,
-        animationSpec = spring(
-            dampingRatio = 0.82f,
-            stiffness = Spring.StiffnessMediumLow
-        ),
+        targetValue = if (hasOverlayOpen) 0.968f else 1f,
+        animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
         label = "overlay_depth_scale"
     )
     val overlayBlurModifier = if (overlayBlurDp > 0.5.dp) {
@@ -288,7 +285,7 @@ fun BrowserMainScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         NovaWallpaperBackground(
             isIncognito = activeTab.isIncognito,
-            backdropBlur = if (hasOverlayOpen) 28.dp else 0.dp
+            backdropBlur = if (hasOverlayOpen) 20.dp else 0.dp
         )
 
         // Smooth GPU-safe Liquid Crossfade between NOVA Home and Full-Bleed Live Webpage

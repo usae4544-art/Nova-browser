@@ -271,21 +271,7 @@ fun LiquidGlassSurface(
             baseFill.copy(alpha = (baseFill.alpha * (if (strong) 0.96f else 0.92f)).coerceAtLeast(0.55f))
         )
     )
-    val shouldShimmer = strong
-    val shimmerDrift = if (shouldShimmer) {
-        val infinite = rememberInfiniteTransition(label = "surface_liquid_shimmer")
-        infinite.animateFloat(
-            initialValue = -0.35f,
-            targetValue = 1.35f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(durationMillis = 5200, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "surface_sheen_sweep"
-        ).value
-    } else {
-        0.5f
-    }
+    val shimmerDrift = 0.42f
 
     val borderBrush = if (accentBorder) {
         Brush.linearGradient(
@@ -324,7 +310,7 @@ fun LiquidGlassSurface(
                         endY = (h * 0.28f).coerceAtLeast(12f)
                     )
                 )
-                if (shouldShimmer && w > 0f && h > 0f) {
+                if (strong && w > 0f && h > 0f) {
                     val bandX = shimmerDrift * w
                     drawRect(
                         brush = Brush.linearGradient(
@@ -397,26 +383,33 @@ fun IphoneLiquidGlassPill(
     val glass = LocalNovaGlassColors.current
     val pillShape = RoundedCornerShape(50)
 
-    // Subtle slow-flowing light drift around the glass edge & caustic sheen
-    val infinite = rememberInfiniteTransition(label = "liquid_rim_flow")
-    val rimShift by infinite.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 6200, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "rim_shift"
-    )
-    val sheenPhase by infinite.animateFloat(
-        initialValue = -0.35f,
-        targetValue = 1.35f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 4800, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "pill_sheen_phase"
-    )
+    // Run gentle shimmer loop ONLY on emphasized capsules so idle toolbars stay at 0% GPU redraw
+    val rimShift: Float
+    val sheenPhase: Float
+    if (accentGlow) {
+        val infinite = rememberInfiniteTransition(label = "liquid_rim_flow")
+        rimShift = infinite.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 6200, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "rim_shift"
+        ).value
+        sheenPhase = infinite.animateFloat(
+            initialValue = -0.35f,
+            targetValue = 1.35f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 4800, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "pill_sheen_phase"
+        ).value
+    } else {
+        rimShift = 0.35f
+        sheenPhase = 0.48f
+    }
     val agslShader = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             runCatching { RuntimeShader(LIQUID_GLASS_AGSL_SHADER) }.getOrNull()

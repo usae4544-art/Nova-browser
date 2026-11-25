@@ -41,11 +41,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -69,20 +73,26 @@ import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.engine.AppUpdateInfo
 import com.example.engine.SiteCertificateSummary
 import com.example.notifications.NovaNotificationSound
 import com.example.ui.components.GlassPillChip
 import com.example.ui.components.LiquidGlassSurface
+import com.example.ui.components.LocalSakugaVfx
 import com.example.ui.components.NovaWallpaperBackground
 import com.example.ui.components.consumeAllTouches
 import com.example.ui.theme.AmberWarning
@@ -846,6 +856,212 @@ fun SiteSecurityInspectorDialog(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Done")
+        }
+    }
+}
+
+/**
+ * Animated Liquid Glass GitHub release update popup with pulsing cosmic halo,
+ * version delta pill, release highlights, Install Now CTA, and Remind Later dismissal.
+ */
+@Composable
+fun AppUpdateLiquidGlassDialog(
+    updateInfo: AppUpdateInfo,
+    onUpdateNow: () -> Unit,
+    onLater: () -> Unit,
+    onOpenReleasePage: () -> Unit
+) {
+    val glass = LocalNovaGlassColors.current
+    val sakugaVfx = LocalSakugaVfx.current
+    var badgeCenter by remember { mutableStateOf(Offset.Zero) }
+    var updateBtnCenter by remember { mutableStateOf(Offset.Zero) }
+    var updateBtnWidth by remember { mutableStateOf(0f) }
+
+    val pulse = rememberInfiniteTransition(label = "update_badge_pulse")
+    val haloScale by pulse.animateFloat(
+        initialValue = 0.92f,
+        targetValue = 1.14f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1500, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "update_halo_scale"
+    )
+
+    LaunchedEffect(updateInfo.releaseTag, badgeCenter) {
+        if (badgeCenter != Offset.Zero) {
+            sakugaVfx?.triggerThemeSplash(badgeCenter)
+        }
+    }
+
+    LiquidGlassModalDialog(onDismissRequest = onLater, accentBorder = true) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.onGloballyPositioned { badgeCenter = it.boundsInRoot().center }
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .scale(haloScale)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.radialGradient(
+                                listOf(
+                                    glass.accentStart.copy(alpha = 0.28f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
+                )
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(54.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(
+                            Brush.linearGradient(
+                                listOf(
+                                    glass.accentStart.copy(alpha = 0.28f),
+                                    glass.accentEnd.copy(alpha = 0.24f)
+                                )
+                            )
+                        )
+                        .border(
+                            width = 1.dp,
+                            brush = Brush.verticalGradient(
+                                listOf(Color.White.copy(alpha = 0.45f), glass.accentStart.copy(alpha = 0.55f))
+                            ),
+                            shape = RoundedCornerShape(18.dp)
+                        )
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.SystemUpdate,
+                        contentDescription = null,
+                        tint = glass.accentStart,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.AutoAwesome,
+                    contentDescription = null,
+                    tint = MintSecure,
+                    modifier = Modifier.size(16.dp)
+                )
+                Text(
+                    text = "New Version Available",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    textAlign = TextAlign.Center
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            LiquidGlassSurface(
+                shape = RoundedCornerShape(50),
+                accentBorder = true
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = "v${updateInfo.currentVersion}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.ArrowForward,
+                        contentDescription = null,
+                        tint = glass.accentStart,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Text(
+                        text = "${updateInfo.releaseTag}${if (updateInfo.formattedApkSize.isNotBlank()) " · ${updateInfo.formattedApkSize}" else ""}",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MintSecure
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            LiquidGlassSurface(
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = updateInfo.releaseTitle,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = updateInfo.releaseNotes,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                OutlinedButton(
+                    onClick = onLater,
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp)
+                        .testTag("app_update_later_button")
+                ) {
+                    Text("Later")
+                }
+
+                Button(
+                    onClick = {
+                        sakugaVfx?.triggerImpactBurst(updateBtnCenter, updateBtnWidth)
+                        onUpdateNow()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = glass.accentStart),
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(46.dp)
+                        .onGloballyPositioned {
+                            val b = it.boundsInRoot()
+                            updateBtnCenter = b.center
+                            updateBtnWidth = b.width
+                        }
+                        .testTag("app_update_install_button")
+                ) {
+                    Icon(Icons.Rounded.SystemUpdate, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Update Now")
+                }
+            }
+
+            TextButton(onClick = onOpenReleasePage) {
+                Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null, modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("View on GitHub", style = MaterialTheme.typography.labelSmall)
+            }
         }
     }
 }

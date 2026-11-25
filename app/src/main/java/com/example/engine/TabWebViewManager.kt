@@ -119,10 +119,9 @@ class TabWebViewManager(
      * and universal smart CSS dark mode) whenever phone system theme, app theme, or Dark Sites toggles.
      */
     fun updateWebsiteDarkMode(enabled: Boolean) {
-        val entries = snapshotWebViews()
-        if (effectiveWebsiteDarkMode == enabled && entries.isEmpty()) return
+        if (effectiveWebsiteDarkMode == enabled) return
         effectiveWebsiteDarkMode = enabled
-        entries.forEach { (_, webView) ->
+        snapshotWebViews().forEach { (_, webView) ->
             applyDarkModeToWebView(webView, enabled)
             injectUniversalDarkModeScript(webView, enabled)
         }

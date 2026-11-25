@@ -63,6 +63,7 @@ import com.example.ui.components.consumeAllTouches
 import com.example.ui.components.rememberSakugaVfxController
 import kotlinx.coroutines.delay
 import com.example.ui.screens.AdBlockDashboardScreen
+import com.example.ui.screens.AppUpdateLiquidGlassDialog
 import com.example.ui.screens.BookmarksScreen
 import com.example.ui.screens.BrowserMainScreen
 import com.example.ui.screens.BrowserMenuOverlay
@@ -184,6 +185,8 @@ fun NovaBrowserApp(
     val pendingFileChooser by viewModel.pendingFileChooser.collectAsStateWithLifecycle()
     val barsHiddenByScroll by viewModel.barsHiddenByScroll.collectAsStateWithLifecycle()
     val pendingUnknownSourcesInstall by viewModel.pendingUnknownSourcesInstall.collectAsStateWithLifecycle()
+    val availableAppUpdate by viewModel.availableAppUpdate.collectAsStateWithLifecycle()
+    val isCheckingForUpdates by viewModel.isCheckingForUpdates.collectAsStateWithLifecycle()
     val biometricAvailable = remember(context) { BiometricHelper.isBiometricAvailable(context) }
 
     var activeToastMessage by remember { mutableStateOf<String?>(null) }
@@ -224,9 +227,6 @@ fun NovaBrowserApp(
         isIncognito = activeTab.isIncognito
     )
     val shouldDarkenWebsites = effectiveDarkTheme && settings.autoDarkWebsites
-    SideEffect {
-        viewModel.updateEffectiveWebsiteDarkMode(shouldDarkenWebsites)
-    }
     LaunchedEffect(shouldDarkenWebsites) {
         viewModel.updateEffectiveWebsiteDarkMode(shouldDarkenWebsites)
     }
@@ -356,7 +356,8 @@ fun NovaBrowserApp(
                     sslWarning != null ||
                     sitePermissionPrompt != null ||
                     incognitoPinChallenge != null ||
-                    pendingUnknownSourcesInstall != null,
+                    pendingUnknownSourcesInstall != null ||
+                    availableAppUpdate != null,
                 onNavigate = viewModel::navigateActiveTab,
                 onBack = viewModel::goBack,
                 onHome = { viewModel.goHome() },
@@ -703,6 +704,8 @@ fun NovaBrowserApp(
                             onOpenVpnSettings = { viewModel.openOverlay(BrowserOverlay.VpnSettings) },
                             onOpenDownloads = { viewModel.openOverlay(BrowserOverlay.Downloads) },
                             onSuppressNextBackgroundLock = onSuppressNextBackgroundLock,
+                            isCheckingForUpdates = isCheckingForUpdates,
+                            onCheckForUpdates = { viewModel.checkForAppUpdates(silent = false) },
                             onShowMessage = viewModel::emitMessage,
                             onBack = viewModel::closeOverlay
                         )
@@ -878,6 +881,19 @@ fun NovaBrowserApp(
                     },
                     onOpenShieldDashboard = { viewModel.openOverlay(BrowserOverlay.AdBlockDashboard) },
                     onDismiss = { showSiteSecurityDialog = false }
+                )
+            }
+
+            // Animated Liquid Glass In-App GitHub Update Popup
+            availableAppUpdate?.let { update ->
+                AppUpdateLiquidGlassDialog(
+                    updateInfo = update,
+                    onUpdateNow = { viewModel.startAppUpdateInstall(update) },
+                    onLater = viewModel::dismissAvailableUpdate,
+                    onOpenReleasePage = {
+                        viewModel.dismissAvailableUpdate()
+                        viewModel.navigateActiveTab(update.releasePageUrl)
+                    }
                 )
             }
 

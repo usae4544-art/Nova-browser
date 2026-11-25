@@ -7,6 +7,7 @@ import com.example.data.local.NovaDatabase
 import com.example.data.preferences.SearchEngine
 import com.example.downloads.NovaDownloadManager
 import com.example.engine.AdBlockEngine
+import com.example.engine.GitHubUpdateChecker
 import com.example.engine.PageSecurityState
 import com.example.engine.SecurityUtils
 import com.example.engine.UrlResolver
@@ -302,5 +303,37 @@ class NovaBrowserUnitTest {
             controller.step(0.03f)
         }
         assertFalse(controller.hasActiveEffects)
+    }
+
+    @Test
+    fun `github update checker compares semantic tags and extracts apk asset`() {
+        assertTrue(GitHubUpdateChecker.isNewerVersion("v1.0.2", "1.0.1"))
+        assertTrue(GitHubUpdateChecker.isNewerVersion("v1.2.0", "1.0.9"))
+        assertFalse(GitHubUpdateChecker.isNewerVersion("v1.0.1", "1.0.1"))
+        assertFalse(GitHubUpdateChecker.isNewerVersion("v1.0.0", "1.0.2"))
+
+        val releaseJson = """
+            {
+              "tag_name": "v1.0.3",
+              "name": "Nova Browser v1.0.3",
+              "draft": false,
+              "html_url": "https://github.com/usae4544-art/Nova-browser/releases/tag/v1.0.3",
+              "body": "## What's New\n- Liquid Glass polish",
+              "assets": [
+                {
+                  "name": "app-debug.apk",
+                  "size": 23382371,
+                  "browser_download_url": "https://github.com/usae4544-art/Nova-browser/releases/download/v1.0.3/app-debug.apk"
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val parsed = GitHubUpdateChecker.parseLatestReleaseJson(releaseJson, "1.0.2")
+        assertNotNull(parsed)
+        assertEquals("1.0.3", parsed!!.latestVersion)
+        assertEquals("v1.0.3", parsed.releaseTag)
+        assertTrue(parsed.apkDownloadUrl.endsWith("/app-debug.apk"))
+        assertNull(GitHubUpdateChecker.parseLatestReleaseJson(releaseJson, "1.0.3"))
     }
 }
