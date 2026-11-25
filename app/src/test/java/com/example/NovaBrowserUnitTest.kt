@@ -318,8 +318,13 @@ class NovaBrowserUnitTest {
               "name": "Nova Browser v1.0.3",
               "draft": false,
               "html_url": "https://github.com/usae4544-art/Nova-browser/releases/tag/v1.0.3",
-              "body": "## What's New\n- Liquid Glass polish",
+              "body": "## What's New\n- \"Liquid Glass\" polish & zero-lag theme switch",
               "assets": [
+                {
+                  "name": "checksums.txt",
+                  "size": 128,
+                  "browser_download_url": "https://github.com/usae4544-art/Nova-browser/releases/download/v1.0.3/checksums.txt"
+                },
                 {
                   "name": "app-debug.apk",
                   "size": 23382371,
@@ -333,7 +338,10 @@ class NovaBrowserUnitTest {
         assertNotNull(parsed)
         assertEquals("1.0.3", parsed!!.latestVersion)
         assertEquals("v1.0.3", parsed.releaseTag)
+        assertEquals(23382371L, parsed.apkSizeBytes)
         assertTrue(parsed.apkDownloadUrl.endsWith("/app-debug.apk"))
+        assertTrue(parsed.releaseNotes.contains("\"Liquid Glass\" polish"))
         assertNull(GitHubUpdateChecker.parseLatestReleaseJson(releaseJson, "1.0.3"))
+        assertNull(GitHubUpdateChecker.parseLatestReleaseJson("{broken json", "1.0.2"))
     }
 }
