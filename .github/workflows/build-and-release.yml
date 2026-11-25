@@ -33,10 +33,19 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
 
-      - name: Create debug keystore if missing
+      - name: Restore persistent debug keystore
+        env:
+          NOVA_DEBUG_KEYSTORE_BASE64: ${{ secrets.NOVA_DEBUG_KEYSTORE_BASE64 }}
         run: |
-          if [ ! -f "debug.keystore" ]; then
-            echo "Generating debug.keystore..."
+          if [ -n "$NOVA_DEBUG_KEYSTORE_BASE64" ]; then
+            echo "Restoring persistent debug.keystore from NOVA_DEBUG_KEYSTORE_BASE64 secret..."
+            echo "$NOVA_DEBUG_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > debug.keystore
+            keytool -list -v -keystore debug.keystore -storepass android | grep -E "Alias name:|SHA256:"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "Error: NOVA_DEBUG_KEYSTORE_BASE64 secret is missing for release build! Aborting to prevent mismatched APK signing certificates."
+            exit 1
+          else
+            echo "Generating ephemeral debug.keystore for non-release CI check..."
             keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
 
@@ -80,10 +89,27 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG_NAME="v1.0.3"
-          RELEASE_TITLE="Nova Browser v1.0.3 (Community Reviews, Accounts, Sakuga Typewriter VFX & All-File Downloads)"
+          TAG_NAME="${GITHUB_REF_NAME}"
+          if [[ "$TAG_NAME" != v* ]]; then
+            TAG_NAME=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.3")
+          fi
 
-          cp RELEASE_NOTES_v1.0.3.md release_notes.md
+          NOTES_FILE="RELEASE_NOTES_${TAG_NAME}.md"
+          if [ -f "$NOTES_FILE" ]; then
+            cp "$NOTES_FILE" release_notes.md
+          else
+            echo "## Nova Browser ${TAG_NAME}" > release_notes.md
+            echo "" >> release_notes.md
+            git log -n 8 --pretty=format:"- %s" >> release_notes.md
+            echo "" >> release_notes.md
+          fi
+
+          if [ "$TAG_NAME" = "v1.0.3" ]; then
+            RELEASE_TITLE="Nova Browser v1.0.3 (Community Reviews, Accounts, Sakuga Typewriter VFX & All-File Downloads)"
+          else
+            RELEASE_TITLE="Nova Browser ${TAG_NAME}"
+          fi
+
           SHA256=$(sha256sum ./app-debug.apk | awk '{print $1}')
           echo "" >> release_notes.md
           echo "**APK SHA-256:**" >> release_notes.md
