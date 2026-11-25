@@ -566,8 +566,8 @@ fun SettingsScreen(
                                 @Suppress("DEPRECATION")
                                 context.packageManager.getPackageInfo(context.packageName, 0)
                             }
-                            pkg.versionName ?: "1.0.4"
-                        }.getOrDefault("1.0.4")
+                            pkg.versionName ?: "1.0.5"
+                        }.getOrDefault("1.0.5")
                     }
                     Text(
                         text = "Nova Browser v$installedVersion",

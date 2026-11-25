@@ -277,6 +277,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     private val _pendingUnknownSourcesInstall = MutableStateFlow<DownloadEntity?>(null)
     val pendingUnknownSourcesInstall: StateFlow<DownloadEntity?> = _pendingUnknownSourcesInstall.asStateFlow()
 
+    private val _pendingSignatureConflict = MutableStateFlow<DownloadEntity?>(null)
+    val pendingSignatureConflict: StateFlow<DownloadEntity?> = _pendingSignatureConflict.asStateFlow()
+
     private val _snackbarMessages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val snackbarMessages: SharedFlow<String> = _snackbarMessages.asSharedFlow()
 
@@ -1089,8 +1092,15 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             is OpenFileOutcome.NeedsUnknownSourcesPermission -> {
                 _pendingUnknownSourcesInstall.value = outcome.item
             }
+            is OpenFileOutcome.SignatureConflict -> {
+                _pendingSignatureConflict.value = outcome.item
+            }
             is OpenFileOutcome.Error -> emitMessage(outcome.message)
         }
+    }
+
+    fun dismissSignatureConflictDialog() {
+        _pendingSignatureConflict.value = null
     }
 
     fun dismissUnknownSourcesPrompt() {
@@ -1503,8 +1513,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 @Suppress("DEPRECATION")
                 ctx.packageManager.getPackageInfo(ctx.packageName, 0)
             }
-            info.versionName ?: "1.0.4"
-        }.getOrDefault("1.0.4")
+            info.versionName ?: "1.0.5"
+        }.getOrDefault("1.0.5")
     }
 
     fun checkForAppUpdates(silent: Boolean = false) {

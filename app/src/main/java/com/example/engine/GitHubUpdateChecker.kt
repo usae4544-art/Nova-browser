@@ -296,8 +296,14 @@ object GitHubUpdateChecker {
                     .removePrefix("# ")
                     .replace("**", "")
                     .replace("`", "")
+                    .let { if (it.startsWith("- ")) "• " + it.removePrefix("- ").trim() else it }
             }
-            .filter { it.isNotBlank() && !it.startsWith("APK SHA-256", ignoreCase = true) }
+            .filter {
+                it.isNotBlank() &&
+                    !it.equals("What's New", ignoreCase = true) &&
+                    !it.startsWith("Nova Browser v", ignoreCase = true) &&
+                    !it.startsWith("APK SHA-256", ignoreCase = true)
+            }
             .take(8)
             .joinToString("\n")
             .ifBlank { "Performance improvements, Liquid Glass polish, and bug fixes." }

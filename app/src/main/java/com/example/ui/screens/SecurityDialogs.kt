@@ -1065,3 +1065,149 @@ fun AppUpdateLiquidGlassDialog(
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Signature Conflict Dialog — shown when downloaded APK cert ≠ installed cert
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+fun SignatureConflictDialog(
+    fileName: String,
+    onUninstallAndInstall: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val glass = LocalNovaGlassColors.current
+    val infiniteTransition = rememberInfiniteTransition(label = "sigConflictHalo")
+    val haloScale by infiniteTransition.animateFloat(
+        initialValue = 0.90f,
+        targetValue = 1.18f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "haloScale"
+    )
+    val haloAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.25f,
+        targetValue = 0.60f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "haloAlpha"
+    )
+
+    LiquidGlassModalDialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Pulsing warning icon halo
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(bottom = 16.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .scale(haloScale)
+                        .background(
+                            brush = Brush.radialGradient(
+                                listOf(
+                                    AmberWarning.copy(alpha = haloAlpha),
+                                    Color.Transparent
+                                )
+                            ),
+                            shape = CircleShape
+                        )
+                )
+                LiquidGlassSurface(
+                    modifier = Modifier.size(56.dp),
+                    shape = CircleShape,
+                    alpha = 0.18f
+                ) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.Warning,
+                            contentDescription = null,
+                            tint = AmberWarning,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
+            }
+
+            Text(
+                text = "Update Signing Changed",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = glass.textPrimary,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(10.dp))
+
+            Text(
+                text = "Nova Browser v1.0.4+ uses a new permanent signing key.\n\n" +
+                        "Android requires uninstalling the old version before installing \"$fileName\".\n\n" +
+                        "Your bookmarks and settings are stored separately and will be restored after reinstall.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = glass.textSecondary,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(6.dp))
+
+            // Warning chip
+            LiquidGlassSurface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                shape = RoundedCornerShape(12.dp),
+                alpha = 0.12f
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Rounded.Shield,
+                        contentDescription = null,
+                        tint = AmberWarning,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "This is a one-time action. Future updates will install smoothly.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AmberWarning
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // Action buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f).height(46.dp),
+                    shape = RoundedCornerShape(50)
+                ) {
+                    Text("Cancel")
+                }
+                Button(
+                    onClick = onUninstallAndInstall,
+                    colors = ButtonDefaults.buttonColors(containerColor = AmberWarning),
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier.weight(1f).height(46.dp)
+                ) {
+                    Icon(Icons.Rounded.SystemUpdate, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Uninstall & Install", color = Color.Black)
+                }
+            }
+        }
+    }
+}

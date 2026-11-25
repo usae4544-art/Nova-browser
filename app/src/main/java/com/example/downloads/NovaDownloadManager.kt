@@ -4,6 +4,7 @@ import android.app.DownloadManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -32,6 +33,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -39,6 +41,7 @@ import java.util.concurrent.TimeUnit
 sealed class OpenFileOutcome {
     data object Opened : OpenFileOutcome()
     data class NeedsUnknownSourcesPermission(val item: DownloadEntity) : OpenFileOutcome()
+    data class SignatureConflict(val item: DownloadEntity) : OpenFileOutcome()
     data class Error(val message: String) : OpenFileOutcome()
 }
 
@@ -202,6 +205,69 @@ class NovaDownloadManager(
         }
     }
 
+    fun createUninstallSelfIntent(): Intent {
+        return Intent(Intent.ACTION_DELETE, Uri.parse("package:${context.packageName}")).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    }
+
+    /**
+     * Checks before invoking Package Installer whether a downloaded APK for this browser
+     * has a different signing certificate than the currently installed build.
+     */
+    @Suppress("DEPRECATION")
+    fun hasSignatureConflictWithInstalledApp(apkFile: File): Boolean {
+        return runCatching {
+            val pm = context.packageManager
+            val archiveInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                pm.getPackageArchiveInfo(
+                    apkFile.absolutePath,
+                    PackageManager.GET_SIGNING_CERTIFICATES
+                )
+            } else {
+                pm.getPackageArchiveInfo(
+                    apkFile.absolutePath,
+                    PackageManager.GET_SIGNATURES
+                )
+            } ?: return false
+
+            if (archiveInfo.packageName != context.packageName) return false
+
+            val installedInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                pm.getPackageInfo(
+                    context.packageName,
+                    PackageManager.GET_SIGNING_CERTIFICATES
+                )
+            } else {
+                pm.getPackageInfo(
+                    context.packageName,
+                    PackageManager.GET_SIGNATURES
+                )
+            }
+
+            val installedDigests = extractSigningDigests(installedInfo)
+            val archiveDigests = extractSigningDigests(archiveInfo)
+            if (installedDigests.isEmpty() || archiveDigests.isEmpty()) return false
+            !doCertSetsMatch(installedDigests, archiveDigests)
+        }.getOrDefault(false)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun extractSigningDigests(pkgInfo: android.content.pm.PackageInfo): Set<String> {
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            pkgInfo.signingInfo?.let { info ->
+                if (info.hasMultipleSigners()) info.apkContentsSigners else info.signingCertificateHistory
+            }
+        } else {
+            pkgInfo.signatures
+        } ?: return emptySet()
+
+        val md = MessageDigest.getInstance("SHA-256")
+        return signatures.map { sig ->
+            md.digest(sig.toByteArray()).joinToString("") { "%02x".format(it) }
+        }.toSet()
+    }
+
     /**
      * Opens or installs any downloaded file (APK, PDF, MP4, MP3, ZIP, Image, Document, etc.)
      * directly via FileProvider content URI and Android's official Package Installer / ACTION_VIEW flow.
@@ -215,6 +281,9 @@ class NovaDownloadManager(
         val isApk = item.fileName.endsWith(".apk", ignoreCase = true)
         if (isApk && !canInstallUnknownApps()) {
             return OpenFileOutcome.NeedsUnknownSourcesPermission(item)
+        }
+        if (isApk && hasSignatureConflictWithInstalledApp(file)) {
+            return OpenFileOutcome.SignatureConflict(item)
         }
 
         return runCatching {
@@ -587,6 +656,11 @@ class NovaDownloadManager(
 
     companion object {
         const val APK_MIME_TYPE = "application/vnd.android.package-archive"
+
+        fun doCertSetsMatch(installedCertDigests: Set<String>, candidateCertDigests: Set<String>): Boolean {
+            if (installedCertDigests.isEmpty() || candidateCertDigests.isEmpty()) return false
+            return installedCertDigests.any { it in candidateCertDigests }
+        }
 
         private val explicitMimeMap = mapOf(
             "apk" to APK_MIME_TYPE,

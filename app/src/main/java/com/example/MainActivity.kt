@@ -84,6 +84,7 @@ import com.example.ui.screens.SplashOverlay
 import com.example.ui.screens.SslWarningDialog
 import com.example.ui.screens.TabSwitcherScreen
 import com.example.ui.screens.UnknownSourcesPermissionDialog
+import com.example.ui.screens.SignatureConflictDialog
 import com.example.ui.screens.UserAccountDialog
 import com.example.ui.screens.VpnSettingsScreen
 import com.example.ui.theme.NovaBrowserTheme
@@ -196,6 +197,7 @@ fun NovaBrowserApp(
     val pendingUnknownSourcesInstall by viewModel.pendingUnknownSourcesInstall.collectAsStateWithLifecycle()
     val availableAppUpdate by viewModel.availableAppUpdate.collectAsStateWithLifecycle()
     val isCheckingForUpdates by viewModel.isCheckingForUpdates.collectAsStateWithLifecycle()
+    val pendingSignatureConflict by viewModel.pendingSignatureConflict.collectAsStateWithLifecycle()
     val biometricAvailable = remember(context) { BiometricHelper.isBiometricAvailable(context) }
 
     var activeToastMessage by remember { mutableStateOf<String?>(null) }
@@ -368,6 +370,7 @@ fun NovaBrowserApp(
                     sitePermissionPrompt != null ||
                     incognitoPinChallenge != null ||
                     pendingUnknownSourcesInstall != null ||
+                    pendingSignatureConflict != null ||
                     availableAppUpdate != null,
                 onNavigate = viewModel::navigateActiveTab,
                 onBack = viewModel::goBack,
@@ -905,6 +908,24 @@ fun NovaBrowserApp(
                         }
                     },
                     onDismiss = viewModel::dismissUnknownSourcesPrompt
+                )
+            }
+
+            // Signature Conflict Dialog — when downloaded APK has a different signing cert
+            pendingSignatureConflict?.let { apkItem ->
+                SignatureConflictDialog(
+                    fileName = apkItem.fileName,
+                    onUninstallAndInstall = {
+                        viewModel.dismissSignatureConflictDialog()
+                        runCatching {
+                            context.startActivity(
+                                viewModel.downloadManager.createUninstallSelfIntent()
+                            )
+                        }.onFailure {
+                            viewModel.emitMessage("Go to Settings → Apps → Nova Browser → Uninstall, then install the update.")
+                        }
+                    },
+                    onDismiss = viewModel::dismissSignatureConflictDialog
                 )
             }
 
