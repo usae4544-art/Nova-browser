@@ -173,6 +173,10 @@ fun NovaBrowserApp(
     val reviews by viewModel.reviews.collectAsStateWithLifecycle()
     val ownReview by viewModel.ownReview.collectAsStateWithLifecycle()
     val userAccount by viewModel.userAccount.collectAsStateWithLifecycle()
+    val savedAccounts by viewModel.allAccounts.collectAsStateWithLifecycle()
+    val googleWebSignedIn by viewModel.googleWebSignedIn.collectAsStateWithLifecycle()
+    val googleDetectedEmail by viewModel.googleDetectedEmail.collectAsStateWithLifecycle()
+    val accountAuthError by viewModel.accountAuthError.collectAsStateWithLifecycle()
     val adBlockStats by viewModel.adBlockStats.collectAsStateWithLifecycle()
     val vpnState by viewModel.vpnState.collectAsStateWithLifecycle()
     val vpnPublicIp by viewModel.vpnPublicIp.collectAsStateWithLifecycle()
@@ -531,6 +535,7 @@ fun NovaBrowserApp(
                             onOpenQrScanner = { viewModel.openOverlay(BrowserOverlay.QrScanner) },
                             onOpenSettings = { viewModel.openOverlay(BrowserOverlay.Settings) },
                             userAccount = userAccount,
+                            googleWebSignedIn = googleWebSignedIn,
                             onOpenReviews = { viewModel.openOverlay(BrowserOverlay.Reviews) },
                             onOpenAccount = { showUserAccountDialog = true }
                         )
@@ -736,8 +741,10 @@ fun NovaBrowserApp(
                         )
                     }
                     BrowserOverlay.UserAccount -> {
-                        showUserAccountDialog = true
-                        viewModel.closeOverlay()
+                        LaunchedEffect(activeOverlay) {
+                            showUserAccountDialog = true
+                            viewModel.closeOverlay()
+                        }
                     }
                 }
             }
@@ -746,8 +753,19 @@ fun NovaBrowserApp(
             if (showUserAccountDialog) {
                 UserAccountDialog(
                     currentAccount = userAccount,
+                    savedAccounts = savedAccounts,
+                    googleWebSignedIn = googleWebSignedIn,
+                    googleDetectedEmail = googleDetectedEmail,
+                    authError = accountAuthError,
+                    onClearError = viewModel::clearAccountAuthError,
                     onDismiss = { showUserAccountDialog = false },
-                    onLogin = viewModel::loginOrRegisterAccount,
+                    onRegister = viewModel::registerAccount,
+                    onLoginWithPassword = viewModel::loginWithPassword,
+                    onSwitchSavedAccount = viewModel::switchActiveAccount,
+                    onLaunchGoogleSignIn = viewModel::launchGoogleSignInFlow,
+                    onLaunchCreateGoogleAccount = viewModel::launchCreateGoogleAccountFlow,
+                    onOpenGoogleAccountHub = viewModel::openGoogleAccountHub,
+                    onSignOutGoogleWeb = viewModel::signOutGoogleWebSession,
                     onLogout = viewModel::logoutAccount,
                     onUpdateProfile = viewModel::updateAccountProfile
                 )

@@ -141,6 +141,21 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         initialValue = null
     )
 
+    val allAccounts: StateFlow<List<UserAccountEntity>> = repository.allAccounts.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    private val _googleWebSignedIn = MutableStateFlow(false)
+    val googleWebSignedIn: StateFlow<Boolean> = _googleWebSignedIn.asStateFlow()
+
+    private val _googleDetectedEmail = MutableStateFlow<String?>(null)
+    val googleDetectedEmail: StateFlow<String?> = _googleDetectedEmail.asStateFlow()
+
+    private val _accountAuthError = MutableStateFlow<String?>(null)
+    val accountAuthError: StateFlow<String?> = _accountAuthError.asStateFlow()
+
     val adBlockStats: StateFlow<AdBlockStats> = adBlockEngine.stats
     val vpnState: StateFlow<VpnRuntimeState> = VpnStateHolder.state
     private val _vpnPublicIp = MutableStateFlow(VpnPublicIpState())
@@ -511,9 +526,40 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                         suggestedMime = mime.ifBlank { null },
                         onStarted = { name -> emitMessage("Downloaded $name") }
                     )
+                },
+                onGoogleWebAuthChanged = { isSignedIn, email, displayName ->
+                    val previouslySignedIn = _googleWebSignedIn.value
+                    _googleWebSignedIn.value = isSignedIn
+                    if (!email.isNullOrBlank()) {
+                        _googleDetectedEmail.value = email
+                    } else if (!isSignedIn) {
+                        _googleDetectedEmail.value = null
+                    }
+                    if (isSignedIn) {
+                        val needsSync = userAccount.value == null ||
+                            userAccount.value?.googleConnected != true ||
+                            (!email.isNullOrBlank() && userAccount.value?.email != email)
+                        if (needsSync) {
+                            viewModelScope.launch {
+                                repository.connectOrSyncGoogleAccount(
+                                    email = email,
+                                    displayName = displayName
+                                )
+                                if (!previouslySignedIn) {
+                                    emitMessage("Google Account connected — active across Nova & websites!")
+                                }
+                            }
+                        }
+                    }
                 }
             )
         )
+        refreshGoogleAuthState()
+    }
+
+    fun refreshGoogleAuthState() {
+        val hasCookies = runCatching { webViewManager.hasGoogleAuthCookies() }.getOrDefault(false)
+        _googleWebSignedIn.value = hasCookies
     }
 
     fun updateEffectiveWebsiteDarkMode(enabled: Boolean) {
@@ -526,6 +572,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun onActivityResume() {
         webViewManager.onActivityResume()
+        refreshGoogleAuthState()
     }
 
     fun onActivityPause() {
@@ -1456,8 +1503,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 @Suppress("DEPRECATION")
                 ctx.packageManager.getPackageInfo(ctx.packageName, 0)
             }
-            info.versionName ?: "1.0.3"
-        }.getOrDefault("1.0.3")
+            info.versionName ?: "1.0.4"
+        }.getOrDefault("1.0.4")
     }
 
     fun checkForAppUpdates(silent: Boolean = false) {
@@ -1581,6 +1628,110 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun clearAccountAuthError() {
+        _accountAuthError.value = null
+    }
+
+    fun registerAccount(
+        email: String,
+        username: String,
+        displayName: String,
+        password: String,
+        avatarColorHex: String = "#8B5CF6",
+        bio: String = "Nova Browser Explorer",
+        onSuccess: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _accountAuthError.value = null
+            repository.registerAccount(email, username, displayName, password, avatarColorHex, bio)
+                .onSuccess { acc ->
+                    if (_googleWebSignedIn.value) {
+                        repository.connectOrSyncGoogleAccount(
+                            email = _googleDetectedEmail.value,
+                            displayName = acc.displayName,
+                            avatarColorHex = avatarColorHex
+                        )
+                    }
+                    emitMessage("Account created & logged in as ${acc.displayName}")
+                    onSuccess()
+                }
+                .onFailure { err ->
+                    _accountAuthError.value = err.message ?: "Could not create account."
+                }
+        }
+    }
+
+    fun loginWithPassword(
+        identifier: String,
+        password: String,
+        onSuccess: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            _accountAuthError.value = null
+            repository.loginWithPassword(identifier, password)
+                .onSuccess { acc ->
+                    emitMessage("Logged in as ${acc.displayName}")
+                    onSuccess()
+                }
+                .onFailure { err ->
+                    _accountAuthError.value = err.message ?: "Sign in failed."
+                }
+        }
+    }
+
+    fun switchActiveAccount(userId: String, onSuccess: () -> Unit = {}) {
+        viewModelScope.launch {
+            _accountAuthError.value = null
+            val acc = repository.switchActiveAccount(userId)
+            if (acc != null) {
+                emitMessage("Switched to ${acc.displayName}")
+                onSuccess()
+            }
+        }
+    }
+
+    fun launchGoogleSignInFlow() {
+        val url = "https://accounts.google.com/ServiceLogin?continue=https://myaccount.google.com/"
+        closeOverlay()
+        if (activeTab.value.isIncognito) {
+            openNewTab(isIncognito = false, initialUrl = url)
+        } else {
+            navigateActiveTab(url)
+        }
+        emitMessage("Sign in with Google — works across all websites!")
+    }
+
+    fun launchCreateGoogleAccountFlow() {
+        val url = "https://accounts.google.com/SignUp?continue=https://myaccount.google.com/"
+        closeOverlay()
+        if (activeTab.value.isIncognito) {
+            openNewTab(isIncognito = false, initialUrl = url)
+        } else {
+            navigateActiveTab(url)
+        }
+        emitMessage("Create Google Account — stays logged in across Nova!")
+    }
+
+    fun openGoogleAccountHub() {
+        val url = "https://myaccount.google.com/"
+        closeOverlay()
+        if (activeTab.value.isIncognito) {
+            openNewTab(isIncognito = false, initialUrl = url)
+        } else {
+            navigateActiveTab(url)
+        }
+    }
+
+    fun signOutGoogleWebSession() {
+        webViewManager.clearGoogleAuthCookies()
+        _googleWebSignedIn.value = false
+        _googleDetectedEmail.value = null
+        viewModelScope.launch {
+            repository.disconnectGoogleAccount()
+            emitMessage("Signed out of Google websites session")
+        }
+    }
+
     fun loginOrRegisterAccount(
         email: String,
         username: String,
@@ -1593,9 +1744,14 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun logoutAccount() {
+    fun logoutAccount(alsoSignOutGoogle: Boolean = false) {
         viewModelScope.launch {
             repository.logoutAccount()
+            if (alsoSignOutGoogle) {
+                webViewManager.clearGoogleAuthCookies()
+                _googleWebSignedIn.value = false
+                _googleDetectedEmail.value = null
+            }
             emitMessage("Signed out of Nova Account")
         }
     }

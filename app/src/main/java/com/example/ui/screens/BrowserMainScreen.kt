@@ -999,7 +999,7 @@ private fun IphoneFloatingLiquidDock(
                                 width = 0.85.dp,
                                 brush = Brush.verticalGradient(
                                     listOf(
-                                        Color.White.copy(alpha = if (glass.isDark) 0.34f else 0.82f),
+                                        Color.White.copy(alpha = if (glass.isDark) 0.34f else 0.50f),
                                         glass.accentStart.copy(alpha = 0.42f)
                                     )
                                 ),

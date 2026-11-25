@@ -106,6 +106,8 @@ jobs:
 
           if [ "$TAG_NAME" = "v1.0.3" ]; then
             RELEASE_TITLE="Nova Browser v1.0.3 (Community Reviews, Accounts, Sakuga Typewriter VFX & All-File Downloads)"
+          elif [ "$TAG_NAME" = "v1.0.4" ]; then
+            RELEASE_TITLE="Nova Browser v1.0.4 (Google Web Login, Soft Light Mode & Pull-Down Menu)"
           else
             RELEASE_TITLE="Nova Browser ${TAG_NAME}"
           fi

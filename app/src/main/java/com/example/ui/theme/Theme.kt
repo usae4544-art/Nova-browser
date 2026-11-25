@@ -4,6 +4,7 @@ import android.app.Activity
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -36,8 +37,12 @@ data class NovaGlassColors(
     val isDark: Boolean,
     val isIncognito: Boolean
 ) {
-    val glassBorder: Color get() = glassBorderTop
-    val glassBorderStrong: Color get() = glassBorderTop.copy(alpha = (glassBorderTop.alpha * 1.5f).coerceAtMost(1f))
+    val glassBorder: Color
+        get() = if (isDark) glassBorderTop else glassBorderBottom
+    val glassBorderStrong: Color
+        get() = (if (isDark) glassBorderTop else glassBorderBottom).let {
+            it.copy(alpha = (it.alpha * 1.45f).coerceAtMost(1f))
+        }
 }
 
 val LocalNovaGlassColors = compositionLocalOf {
@@ -114,9 +119,9 @@ private val NovaLightColorScheme = lightColorScheme(
     onBackground = FrostOnBg,
     surface = FrostLightSurface,
     onSurface = FrostOnBg,
-    surfaceVariant = Color(0xFFE2E8F8),
+    surfaceVariant = Color(0xFFCCD7EB),
     onSurfaceVariant = FrostOnSurfaceVariant,
-    outline = Color(0xFFA5B4FC),
+    outline = Color(0xFF6474A8),
     error = Color(0xFFE11D48),
     onError = Color.White
 )
@@ -186,14 +191,14 @@ fun NovaBrowserTheme(
             isIncognito = false
         )
         else -> NovaGlassColors(
-            glassSurface = Color(0xDBF7FAFF),
-            glassSurfaceStrong = Color(0xF8F4F8FF),
-            glassBorderTop = Color(0xD8FFFFFF),
-            glassBorderBottom = Color(0x52818CF8),
+            glassSurface = Color(0xCED8E2F3),
+            glassSurfaceStrong = Color(0xECE1E8F6),
+            glassBorderTop = Color(0x99EEF4FF),
+            glassBorderBottom = Color(0x6E5B6CA3),
             accentStart = FrostSecondary,
             accentEnd = FrostTertiary,
-            glowColor = Color(0x2E4338CA),
-            chipActiveBg = Color(0x304338CA),
+            glowColor = Color(0x283730A3),
+            chipActiveBg = Color(0x2E3730A3),
             isDark = false,
             isIncognito = false
         )
@@ -219,8 +224,11 @@ fun NovaBrowserTheme(
     CompositionLocalProvider(LocalNovaGlassColors provides glassColors) {
         MaterialTheme(
             colorScheme = colorScheme,
-            typography = NovaTypography,
-            content = content
-        )
+            typography = NovaTypography
+        ) {
+            CompositionLocalProvider(LocalContentColor provides colorScheme.onSurface) {
+                content()
+            }
+        }
     }
 }

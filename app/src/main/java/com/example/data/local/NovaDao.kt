@@ -174,11 +174,17 @@ interface UserAccountDao {
     @Query("SELECT * FROM user_accounts WHERE isLoggedIn = 1 LIMIT 1")
     fun getActiveAccount(): Flow<UserAccountEntity?>
 
+    @Query("SELECT * FROM user_accounts ORDER BY isLoggedIn DESC, createdAt DESC")
+    fun getAllAccounts(): Flow<List<UserAccountEntity>>
+
     @Query("SELECT * FROM user_accounts WHERE userId = :userId LIMIT 1")
     suspend fun getById(userId: String): UserAccountEntity?
 
-    @Query("SELECT * FROM user_accounts WHERE email = :email LIMIT 1")
+    @Query("SELECT * FROM user_accounts WHERE LOWER(email) = LOWER(:email) LIMIT 1")
     suspend fun getByEmail(email: String): UserAccountEntity?
+
+    @Query("SELECT * FROM user_accounts WHERE LOWER(username) = LOWER(:username) LIMIT 1")
+    suspend fun getByUsername(username: String): UserAccountEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdate(account: UserAccountEntity)

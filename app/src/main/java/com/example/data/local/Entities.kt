@@ -106,6 +106,10 @@ data class UserAccountEntity(
     val displayName: String,
     val avatarColorHex: String = "#8B5CF6",
     val bio: String = "Nova Browser Explorer",
+    val passwordHash: String = "",
+    val passwordSalt: String = "",
+    val googleConnected: Boolean = false,
+    val authProvider: String = "NOVA",
     val isLoggedIn: Boolean = true,
     val createdAt: Long = System.currentTimeMillis()
 )

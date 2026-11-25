@@ -19,7 +19,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ReviewEntity::class,
         UserAccountEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class NovaDatabase : RoomDatabase() {
@@ -78,6 +78,15 @@ abstract class NovaDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `user_accounts` ADD COLUMN `passwordHash` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `user_accounts` ADD COLUMN `passwordSalt` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `user_accounts` ADD COLUMN `googleConnected` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `user_accounts` ADD COLUMN `authProvider` TEXT NOT NULL DEFAULT 'NOVA'")
+            }
+        }
+
         fun getInstance(context: Context): NovaDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -85,7 +94,7 @@ abstract class NovaDatabase : RoomDatabase() {
                     NovaDatabase::class.java,
                     "nova_browser.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { INSTANCE = it }
             }

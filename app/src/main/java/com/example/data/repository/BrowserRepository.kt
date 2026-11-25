@@ -13,6 +13,7 @@ import com.example.data.local.UserAccountEntity
 import com.example.data.preferences.BrowserPreferences
 import com.example.data.preferences.BrowserSettings
 import com.example.data.preferences.SearchEngine
+import com.example.engine.SecurityUtils
 import com.example.ui.theme.AppThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
@@ -34,6 +35,7 @@ class BrowserRepository(
     val reviews: Flow<List<ReviewEntity>> = database.reviewDao().getAllReviews()
     val ownReview: Flow<ReviewEntity?> = database.reviewDao().getOwnReview()
     val activeAccount: Flow<UserAccountEntity?> = database.userAccountDao().getActiveAccount()
+    val allAccounts: Flow<List<UserAccountEntity>> = database.userAccountDao().getAllAccounts()
 
     suspend fun ensureDefaultReviews() {
         if (database.reviewDao().count() == 0) {
@@ -79,6 +81,137 @@ class BrowserRepository(
     suspend fun likeReview(id: Long) = database.reviewDao().incrementLike(id)
 
     suspend fun deleteReview(id: Long) = database.reviewDao().deleteById(id)
+
+    suspend fun registerAccount(
+        email: String,
+        username: String,
+        displayName: String,
+        password: String,
+        avatarColorHex: String = "#8B5CF6",
+        bio: String = "Nova Browser Explorer"
+    ): Result<UserAccountEntity> {
+        val cleanEmail = email.trim().lowercase()
+        val cleanUsername = username.trim().removePrefix("@").lowercase()
+            .ifBlank { cleanEmail.substringBefore("@").replace(Regex("[^a-z0-9._-]"), "_") }
+        val cleanName = displayName.trim().ifBlank { cleanUsername }
+        if (cleanEmail.isBlank() || !cleanEmail.contains("@") || !cleanEmail.substringAfter("@").contains(".")) {
+            return Result.failure(IllegalArgumentException("Please enter a valid email address."))
+        }
+        if (password.length < 6) {
+            return Result.failure(IllegalArgumentException("Password must be at least 6 characters."))
+        }
+        if (database.userAccountDao().getByEmail(cleanEmail) != null) {
+            return Result.failure(IllegalArgumentException("An account with $cleanEmail already exists. Use Sign In."))
+        }
+        if (cleanUsername.isNotBlank() && database.userAccountDao().getByUsername(cleanUsername) != null) {
+            return Result.failure(IllegalArgumentException("Username @$cleanUsername is already taken."))
+        }
+        val salt = SecurityUtils.generateSalt()
+        val hash = SecurityUtils.hashPassword(password, salt)
+        database.userAccountDao().logoutAll()
+        val newAccount = UserAccountEntity(
+            userId = "user_" + UUID.randomUUID().toString().take(8),
+            username = cleanUsername.ifBlank { "nova_user" },
+            email = cleanEmail,
+            displayName = cleanName,
+            avatarColorHex = avatarColorHex.ifBlank { "#8B5CF6" },
+            bio = bio.trim().ifBlank { "Nova Browser Explorer" },
+            passwordHash = hash,
+            passwordSalt = salt,
+            googleConnected = false,
+            authProvider = "NOVA",
+            isLoggedIn = true,
+            createdAt = System.currentTimeMillis()
+        )
+        database.userAccountDao().insertOrUpdate(newAccount)
+        return Result.success(newAccount)
+    }
+
+    suspend fun loginWithPassword(
+        identifier: String,
+        password: String
+    ): Result<UserAccountEntity> {
+        val clean = identifier.trim().removePrefix("@")
+        if (clean.isBlank()) {
+            return Result.failure(IllegalArgumentException("Enter your email or username."))
+        }
+        val existing = database.userAccountDao().getByEmail(clean)
+            ?: database.userAccountDao().getByUsername(clean)
+            ?: return Result.failure(IllegalArgumentException("No account found for \"$clean\". Create an account first."))
+
+        if (existing.passwordHash.isNotBlank()) {
+            if (!SecurityUtils.verifyPassword(password, existing.passwordHash, existing.passwordSalt)) {
+                return Result.failure(IllegalArgumentException("Incorrect password. Please try again."))
+            }
+        }
+        database.userAccountDao().logoutAll()
+        val updated = existing.copy(isLoggedIn = true)
+        database.userAccountDao().insertOrUpdate(updated)
+        return Result.success(updated)
+    }
+
+    suspend fun switchActiveAccount(userId: String): UserAccountEntity? {
+        val target = database.userAccountDao().getById(userId) ?: return null
+        database.userAccountDao().logoutAll()
+        database.userAccountDao().setLoggedIn(userId)
+        return target.copy(isLoggedIn = true)
+    }
+
+    suspend fun connectOrSyncGoogleAccount(
+        email: String? = null,
+        displayName: String? = null,
+        avatarColorHex: String = "#38BDF8"
+    ): UserAccountEntity {
+        val active = database.userAccountDao().getActiveAccount().firstOrNull()
+        if (active != null) {
+            val resolvedEmail = email?.trim()?.lowercase()?.takeIf { it.contains("@") } ?: active.email
+            val resolvedName = displayName?.trim()?.takeIf { it.isNotBlank() } ?: active.displayName
+            val updated = active.copy(
+                email = resolvedEmail.ifBlank { active.email },
+                displayName = resolvedName,
+                googleConnected = true,
+                isLoggedIn = true
+            )
+            database.userAccountDao().insertOrUpdate(updated)
+            return updated
+        }
+        val cleanEmail = email?.trim()?.lowercase()?.takeIf { it.contains("@") }.orEmpty()
+        val existingByEmail = if (cleanEmail.isNotBlank()) database.userAccountDao().getByEmail(cleanEmail) else null
+        database.userAccountDao().logoutAll()
+        if (existingByEmail != null) {
+            val updated = existingByEmail.copy(
+                displayName = displayName?.trim()?.takeIf { it.isNotBlank() } ?: existingByEmail.displayName,
+                googleConnected = true,
+                authProvider = "GOOGLE",
+                isLoggedIn = true
+            )
+            database.userAccountDao().insertOrUpdate(updated)
+            return updated
+        }
+        val derivedUser = cleanEmail.substringBefore("@").ifBlank { "google_user" }
+        val derivedName = displayName?.trim()?.takeIf { it.isNotBlank() }
+            ?: cleanEmail.substringBefore("@").takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() }
+            ?: "Google Account"
+        val account = UserAccountEntity(
+            userId = "google_" + UUID.randomUUID().toString().take(8),
+            username = derivedUser,
+            email = cleanEmail.ifBlank { "google-session@accounts.google.com" },
+            displayName = derivedName,
+            avatarColorHex = avatarColorHex,
+            bio = "Signed in with Google across Nova Browser",
+            googleConnected = true,
+            authProvider = "GOOGLE",
+            isLoggedIn = true,
+            createdAt = System.currentTimeMillis()
+        )
+        database.userAccountDao().insertOrUpdate(account)
+        return account
+    }
+
+    suspend fun disconnectGoogleAccount() {
+        val active = database.userAccountDao().getActiveAccount().firstOrNull() ?: return
+        database.userAccountDao().insertOrUpdate(active.copy(googleConnected = false))
+    }
 
     suspend fun loginOrRegisterAccount(
         email: String,

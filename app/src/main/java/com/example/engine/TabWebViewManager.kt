@@ -61,7 +61,8 @@ data class TabWebEventCallbacks(
     val onSiteNotificationPermissionRequested: (tabId: String, origin: String, host: String, jsCallbackId: String) -> Unit = { _, _, _, _ -> },
     val onSiteNotificationPosted: (host: String, title: String, body: String, url: String) -> Unit = { _, _, _, _ -> },
     val getSiteNotificationAllowed: (host: String) -> Boolean? = { null },
-    val onBlobDownloadReady: (dataUrl: String, filename: String, mimeType: String) -> Unit = { _, _, _ -> }
+    val onBlobDownloadReady: (dataUrl: String, filename: String, mimeType: String) -> Unit = { _, _, _ -> },
+    val onGoogleWebAuthChanged: (isSignedIn: Boolean, email: String?, displayName: String?) -> Unit = { _, _, _ -> }
 )
 
 data class BackNavResult(
@@ -723,6 +724,9 @@ class TabWebViewManager(
                     injectFloatingGlassSafeInsets(view)
                     injectUniversalDarkModeScript(view, effectiveWebsiteDarkMode)
                     injectNotificationBridgeScript(view, tabId, isIncognito)
+                    if (!isIncognito && resolvedUrl.startsWith("https://", ignoreCase = true)) {
+                        syncGoogleAuthSessionIfRelevant(view, resolvedUrl)
+                    }
                 }
                 callbacks?.onPageFinished(
                     tabId,
@@ -1284,12 +1288,113 @@ class TabWebViewManager(
         }
     }
 
+    fun hasGoogleAuthCookies(): Boolean {
+        val cm = runCatching { CookieManager.getInstance() }.getOrNull() ?: return false
+        val combined = listOf(
+            cm.getCookie("https://accounts.google.com").orEmpty(),
+            cm.getCookie("https://www.google.com").orEmpty(),
+            cm.getCookie("https://myaccount.google.com").orEmpty()
+        ).joinToString("; ")
+        return isGoogleAuthCookieHeader(combined)
+    }
+
+    fun clearGoogleAuthCookies() {
+        runCatching {
+            val cm = CookieManager.getInstance()
+            val googleDomains = listOf(
+                "https://accounts.google.com",
+                "https://myaccount.google.com",
+                "https://www.google.com",
+                "https://google.com"
+            )
+            googleDomains.forEach { domainUrl ->
+                val raw = cm.getCookie(domainUrl).orEmpty()
+                raw.split(";").forEach { pair ->
+                    val name = pair.substringBefore("=").trim()
+                    if (name.isNotBlank()) {
+                        cm.setCookie(domainUrl, "$name=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/")
+                        cm.setCookie("https://.google.com", "$name=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Domain=.google.com; Path=/")
+                    }
+                }
+            }
+            cm.flush()
+        }
+        callbacks?.onGoogleWebAuthChanged(false, null, null)
+    }
+
+    private fun syncGoogleAuthSessionIfRelevant(webView: WebView, url: String) {
+        val host = UrlResolver.extractHost(url)
+        val isGoogleHost = host == "google.com" || host.endsWith(".google.com") || host == "youtube.com" || host.endsWith(".youtube.com")
+        if (!isGoogleHost) return
+
+        runCatching { CookieManager.getInstance().flush() }
+        val signedIn = hasGoogleAuthCookies()
+        if (!signedIn) {
+            callbacks?.onGoogleWebAuthChanged(false, null, null)
+            return
+        }
+
+        // Only inspect Google's own account identity elements on Google domains
+        val js = """
+            (function() {
+                try {
+                    var email = '';
+                    var name = '';
+                    var emailEl = document.querySelector('[data-email]');
+                    if (emailEl) {
+                        email = emailEl.getAttribute('data-email') || '';
+                    }
+                    if (!email) {
+                        var m = (document.body ? document.body.innerText : '').match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
+                        if (m) email = m[0];
+                    }
+                    var nameEl = document.querySelector('[data-name]');
+                    if (nameEl) name = nameEl.getAttribute('data-name') || '';
+                    if (!name) {
+                        var aria = document.querySelector('a[aria-label*="Google Account" i]');
+                        if (aria) {
+                            var label = aria.getAttribute('aria-label') || '';
+                            var inner = label.replace(/.*Google Account\s*:\s*/i, '').trim();
+                            var parenIdx = inner.indexOf('(');
+                            if (parenIdx > 0) {
+                                name = inner.substring(0, parenIdx).trim();
+                                if (!email) {
+                                    var emMatch = inner.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
+                                    if (emMatch) email = emMatch[0];
+                                }
+                            }
+                        }
+                    }
+                    return JSON.stringify({ email: email, name: name });
+                } catch (e) {
+                    return '{}';
+                }
+            })();
+        """.trimIndent()
+
+        runCatching {
+            webView.evaluateJavascript(js) { rawJson ->
+                val obj = runCatching {
+                    val unwrapped = if (rawJson != null && rawJson.startsWith("\"")) {
+                        org.json.JSONTokener(rawJson).nextValue()?.toString().orEmpty()
+                    } else rawJson.orEmpty()
+                    JSONObject(unwrapped)
+                }.getOrNull()
+                val email = obj?.optString("email")?.trim()?.takeIf { it.contains("@") }
+                val name = obj?.optString("name")?.trim()?.takeIf { it.isNotBlank() }
+                callbacks?.onGoogleWebAuthChanged(true, email, name)
+            }
+        }.onFailure {
+            callbacks?.onGoogleWebAuthChanged(true, null, null)
+        }
+    }
+
     private fun applyUserAgent(webView: WebView, desktopMode: Boolean) {
         val defaultUa = WebSettings.getDefaultUserAgent(appContext)
         val targetUa = if (desktopMode) {
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         } else {
-            defaultUa
+            sanitizeBrowserUserAgent(defaultUa)
         }
         if (webView.settings.userAgentString != targetUa) {
             webView.settings.userAgentString = targetUa
@@ -1416,6 +1521,20 @@ class TabWebViewManager(
     }
 
     companion object {
+        fun sanitizeBrowserUserAgent(rawUa: String): String {
+            return rawUa
+                .replace("; wv)", ")")
+                .replace(Regex("\\s*Version/\\d+(?:\\.\\d+)*"), "")
+                .replace(Regex("\\s{2,}"), " ")
+                .trim()
+        }
+
+        fun isGoogleAuthCookieHeader(cookieHeader: String): Boolean {
+            if (cookieHeader.isBlank()) return false
+            return listOf("SID=", "HSID=", "SSID=", "APISID=", "SAPISID=", "__Secure-1PSID=", "__Secure-3PSID=")
+                .any { cookieHeader.contains(it) }
+        }
+
         val DOWNLOADABLE_EXTENSIONS = listOf(
             ".apk", ".apks", ".xapk",
             ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".iso", ".dmg",

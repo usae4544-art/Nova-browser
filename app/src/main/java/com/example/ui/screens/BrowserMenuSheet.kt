@@ -5,13 +5,16 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,9 +22,11 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -69,8 +74,10 @@ import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,8 +89,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -106,6 +115,7 @@ import com.example.ui.theme.AppThemeMode
 import com.example.ui.theme.LocalNovaGlassColors
 import com.example.ui.theme.MintSecure
 import com.example.viewmodel.BrowserTab
+import kotlinx.coroutines.launch
 
 @Composable
 fun BrowserMenuOverlay(
@@ -147,13 +157,39 @@ fun BrowserMenuOverlay(
     onOpenQrScanner: () -> Unit,
     onOpenSettings: () -> Unit,
     userAccount: UserAccountEntity? = null,
+    googleWebSignedIn: Boolean = false,
     onOpenReviews: () -> Unit = {},
     onOpenAccount: () -> Unit = {}
 ) {
-    BackHandler(onBack = onDismiss)
     val glass = LocalNovaGlassColors.current
+    val haptic = LocalHapticFeedback.current
+    val sakugaVfx = LocalSakugaVfx.current
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
     val backdropInteraction = remember { MutableInteractionSource() }
     val enterAnim = remember { Animatable(0f) }
+    val dragOffsetY = remember { Animatable(0f) }
+    var sheetHeightPx by remember { mutableFloatStateOf(900f) }
+    var isDraggingHandle by remember { mutableStateOf(false) }
+    var isDismissing by remember { mutableStateOf(false) }
+    var handleCenter by remember { mutableStateOf(Offset.Zero) }
+
+    fun dismissAnimated() {
+        if (isDismissing) return
+        isDismissing = true
+        scope.launch {
+            sakugaVfx?.triggerBottomTapWave(handleCenter)
+            val exitTarget = (sheetHeightPx + 120f).coerceAtLeast(600f)
+            dragOffsetY.animateTo(
+                targetValue = exitTarget,
+                animationSpec = tween(durationMillis = 190)
+            )
+            onDismiss()
+        }
+    }
+
+    BackHandler { dismissAnimated() }
+
     LaunchedEffect(Unit) {
         enterAnim.animateTo(
             targetValue = 1f,
@@ -165,30 +201,48 @@ fun BrowserMenuOverlay(
     }
     val settleProgress = enterAnim.value.coerceIn(0f, 1f)
     val sheetRevealBlur = ((1f - settleProgress) * 6f).dp
-    val contentScale = 0.96f + 0.04f * settleProgress
+    val dragProgress = (dragOffsetY.value / sheetHeightPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
+    val contentScale = (0.96f + 0.04f * settleProgress) * (1f - dragProgress * 0.03f)
+    val entrySlidePx = (1f - settleProgress) * with(density) { 48.dp.toPx() }
 
-    Box(
-        contentAlignment = Alignment.BottomCenter,
-        modifier = Modifier
-            .fillMaxSize()
-            .consumeAllTouches()
-            .clickable(
-                interactionSource = backdropInteraction,
-                indication = null,
-                onClick = onDismiss
-            )
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxSize()
     ) {
+        // Reserve clear clickable top space below status bar/notch so tapping above the sheet cleanly goes back
+        val maxSheetHeight = (maxHeight * 0.76f).coerceAtMost(maxHeight - 104.dp).coerceAtLeast(280.dp)
+
+        // Full-screen touch consumer & tap-to-close backdrop behind the sheet
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .consumeAllTouches()
+                .clickable(
+                    interactionSource = backdropInteraction,
+                    indication = null,
+                    onClick = { dismissAnimated() }
+                )
+        )
+
         LiquidGlassSurface(
             shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
             strong = true,
             accentBorder = true,
             elevation = 20.dp,
             modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .statusBarsPadding()
+                .padding(top = 84.dp)
                 .fillMaxWidth()
                 .widthIn(max = 620.dp)
+                .heightIn(max = maxSheetHeight)
+                .onGloballyPositioned { coords ->
+                    sheetHeightPx = coords.size.height.toFloat().coerceAtLeast(300f)
+                }
                 .graphicsLayer {
+                    translationY = entrySlidePx + dragOffsetY.value
                     scaleX = contentScale
                     scaleY = contentScale
+                    alpha = (1f - dragProgress * 0.28f).coerceIn(0.45f, 1f)
                 }
                 .then(
                     if (sheetRevealBlur > 0.4.dp) {
@@ -207,19 +261,84 @@ fun BrowserMenuOverlay(
                 modifier = Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .padding(top = 4.dp, bottom = 12.dp)
             ) {
-                // Sleek iOS-style frosted sheet handle
+                // Interactive pull-down notch/handle strip with live drag-follow & spring dismiss animation
                 Box(
+                    contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .align(Alignment.CenterHorizontally)
-                        .padding(bottom = 8.dp)
-                        .width(42.dp)
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.24f))
-                )
+                        .fillMaxWidth()
+                        .height(34.dp)
+                        .onGloballyPositioned { handleCenter = it.boundsInRoot().center }
+                        .pointerInput(Unit) {
+                            val dismissThresholdPx = with(density) { 105.dp.toPx() }
+                            var totalDrag = 0f
+                            detectVerticalDragGestures(
+                                onDragStart = {
+                                    isDraggingHandle = true
+                                    totalDrag = dragOffsetY.value
+                                },
+                                onVerticalDrag = { change, dragAmount ->
+                                    change.consume()
+                                    totalDrag = (totalDrag + dragAmount).coerceAtLeast(0f)
+                                    scope.launch { dragOffsetY.snapTo(totalDrag) }
+                                },
+                                onDragEnd = {
+                                    isDraggingHandle = false
+                                    if (totalDrag > dismissThresholdPx) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        dismissAnimated()
+                                    } else {
+                                        scope.launch {
+                                            dragOffsetY.animateTo(
+                                                targetValue = 0f,
+                                                animationSpec = spring(
+                                                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                                                    stiffness = Spring.StiffnessMedium
+                                                )
+                                            )
+                                        }
+                                    }
+                                },
+                                onDragCancel = {
+                                    isDraggingHandle = false
+                                    scope.launch {
+                                        dragOffsetY.animateTo(
+                                            targetValue = 0f,
+                                            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
+                                        )
+                                    }
+                                }
+                            )
+                        }
+                        .testTag("menu_pull_handle")
+                ) {
+                    val handleWidth by animateFloatAsState(
+                        targetValue = if (isDraggingHandle) 62f else 46f,
+                        animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy),
+                        label = "handle_width"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .width(handleWidth.dp)
+                            .height(if (isDraggingHandle) 5.5.dp else 4.5.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(
+                                if (isDraggingHandle) {
+                                    glass.accentStart.copy(alpha = 0.78f)
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.28f)
+                                }
+                            )
+                    )
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp)
+                ) {
 
                 // User Account Banner at top of menu
                 Row(
@@ -273,7 +392,16 @@ fun BrowserMenuOverlay(
                                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
                             )
                             Text(
-                                text = if (userAccount != null) "Logged in & Synced · Tap to view" else "Sign in to sync reviews & settings",
+                                text = when {
+                                    userAccount != null && (googleWebSignedIn || userAccount.googleConnected) ->
+                                        "Google active across sites · Tap to manage"
+                                    userAccount != null ->
+                                        "Logged in & Synced · Tap to view"
+                                    googleWebSignedIn ->
+                                        "Google Web active · Tap to link profile"
+                                    else ->
+                                        "Sign in with Google or create account"
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -479,7 +607,7 @@ private fun MenuActionTile(
                 color = if (data.highlighted) {
                     glass.accentStart.copy(alpha = 0.48f)
                 } else {
-                    glass.glassBorderTop.copy(alpha = 0.42f)
+                    glass.glassBorder.copy(alpha = if (glass.isDark) 0.42f else 0.72f)
                 },
                 shape = RoundedCornerShape(18.dp)
             )

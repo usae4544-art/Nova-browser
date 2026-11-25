@@ -85,9 +85,9 @@ object SecurityUtils {
         return bytes.toHexString()
     }
 
-    fun hashPin(pin: String, salt: String): String {
+    private fun hashSecret(secret: String, salt: String, domain: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
-        var current = "$salt:$pin:nova_vault_v1".toByteArray(Charsets.UTF_8)
+        var current = "$salt:$secret:$domain".toByteArray(Charsets.UTF_8)
         // Iterative stretching for strong offline brute-force resistance
         repeat(10_000) {
             current = digest.digest(current)
@@ -95,14 +95,26 @@ object SecurityUtils {
         return current.toHexString()
     }
 
-    fun verifyPin(pin: String, expectedHash: String, salt: String): Boolean {
+    private fun verifySecret(secret: String, expectedHash: String, salt: String, domain: String): Boolean {
         if (expectedHash.isBlank() || salt.isBlank()) return false
-        val actual = hashPin(pin, salt)
+        val actual = hashSecret(secret, salt, domain)
         return MessageDigest.isEqual(
             actual.toByteArray(Charsets.UTF_8),
             expectedHash.toByteArray(Charsets.UTF_8)
         )
     }
+
+    fun hashPin(pin: String, salt: String): String =
+        hashSecret(pin, salt, domain = "nova_vault_v1")
+
+    fun verifyPin(pin: String, expectedHash: String, salt: String): Boolean =
+        verifySecret(pin, expectedHash, salt, domain = "nova_vault_v1")
+
+    fun hashPassword(password: String, salt: String): String =
+        hashSecret(password, salt, domain = "nova_account_v1")
+
+    fun verifyPassword(password: String, expectedHash: String, salt: String): Boolean =
+        verifySecret(password, expectedHash, salt, domain = "nova_account_v1")
 
     /**
      * Validates a numeric IPv4 or IPv6 DNS address without performing blocking DNS resolution.

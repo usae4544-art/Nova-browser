@@ -412,4 +412,24 @@ class NovaBrowserUnitTest {
         }
         assertFalse(controller.hasActiveEffects)
     }
+
+    @Test
+    fun `google web auth UA sanitizer, salted password hashing, and room v4 migration behave cleanly`() {
+        val rawWvUa = "Mozilla/5.0 (Linux; Android 14; Pixel 8; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/128.0.0.0 Mobile Safari/537.36"
+        val cleanUa = TabWebViewManager.sanitizeBrowserUserAgent(rawWvUa)
+        assertFalse(cleanUa.contains("; wv)"))
+        assertFalse(cleanUa.contains("Version/4.0"))
+        assertTrue(cleanUa.contains("Chrome/128.0.0.0 Mobile Safari/537.36"))
+
+        assertTrue(TabWebViewManager.isGoogleAuthCookieHeader("PREF=1; __Secure-1PSID=abc123; NID=xyz"))
+        assertFalse(TabWebViewManager.isGoogleAuthCookieHeader("NID=anonymous_only; AEC=123"))
+
+        val salt = SecurityUtils.generateSalt()
+        val pwHash = SecurityUtils.hashPassword("NovaSecret!99", salt)
+        assertTrue(SecurityUtils.verifyPassword("NovaSecret!99", pwHash, salt))
+        assertFalse(SecurityUtils.verifyPassword("WrongPass", pwHash, salt))
+
+        assertEquals(3, NovaDatabase.MIGRATION_3_4.startVersion)
+        assertEquals(4, NovaDatabase.MIGRATION_3_4.endVersion)
+    }
 }

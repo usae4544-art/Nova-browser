@@ -206,10 +206,10 @@ fun NovaWallpaperBackground(
                     .background(
                         Brush.linearGradient(
                             colors = listOf(
-                                Color(0xFFE6EEFF),
-                                Color(0xFFF2EAFF),
-                                Color(0xFFE2F5FE),
-                                Color(0xFFEDF2FF)
+                                Color(0xFFC0CEE6),
+                                Color(0xFFCCC8E3),
+                                Color(0xFFB8D2E8),
+                                Color(0xFFC5D0E6)
                             )
                         )
                     )
@@ -228,7 +228,7 @@ fun NovaWallpaperBackground(
                 x = w * (0.78f + 0.12f * sin(phase * 0.85f)),
                 y = h * (0.62f + 0.10f * cos(phase * 0.85f))
             )
-            val orbAlpha = if (glass.isDark) 0.16f else 0.22f
+            val orbAlpha = if (glass.isDark) 0.16f else 0.14f
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(glass.accentStart.copy(alpha = orbAlpha), Color.Transparent),
@@ -277,7 +277,7 @@ fun LiquidGlassSurface(
         Brush.linearGradient(
             listOf(
                 glass.accentStart.copy(alpha = 0.56f),
-                Color.White.copy(alpha = if (glass.isDark) 0.24f else 0.78f),
+                Color.White.copy(alpha = if (glass.isDark) 0.24f else 0.48f),
                 glass.accentEnd.copy(alpha = 0.46f)
             )
         )
@@ -290,20 +290,19 @@ fun LiquidGlassSurface(
             .shadow(
                 elevation = elevation,
                 shape = shape,
-                ambientColor = Color.Black.copy(alpha = if (glass.isDark) 0.34f else 0.11f),
+                ambientColor = Color.Black.copy(alpha = if (glass.isDark) 0.34f else 0.14f),
                 spotColor = glass.glowColor
             )
             .clip(shape)
             .background(fillBrush)
             .drawWithContent {
-                drawContent()
-                // Subtle real Liquid Glass dome specular & diagonal sheen
+                // Draw subtle dome specular & sheen behind foreground text so content contrast stays crisp
                 val w = size.width
                 val h = size.height
                 drawRect(
                     brush = Brush.verticalGradient(
                         colors = listOf(
-                            Color.White.copy(alpha = if (glass.isDark) 0.08f else 0.32f),
+                            Color.White.copy(alpha = if (glass.isDark) 0.08f else 0.12f),
                             Color.Transparent
                         ),
                         startY = 0f,
@@ -316,8 +315,8 @@ fun LiquidGlassSurface(
                         brush = Brush.linearGradient(
                             colors = listOf(
                                 Color.Transparent,
-                                Color.White.copy(alpha = if (glass.isDark) 0.055f else 0.18f),
-                                glass.accentStart.copy(alpha = if (glass.isDark) 0.05f else 0.06f),
+                                Color.White.copy(alpha = if (glass.isDark) 0.055f else 0.065f),
+                                glass.accentStart.copy(alpha = if (glass.isDark) 0.05f else 0.045f),
                                 Color.Transparent
                             ),
                             start = Offset(bandX - w * 0.35f, 0f),
@@ -325,6 +324,7 @@ fun LiquidGlassSurface(
                         )
                     )
                 }
+                drawContent()
             }
             .border(
                 width = 0.95.dp,
@@ -355,14 +355,15 @@ half4 main(float2 fragCoord) {
     float2 normal = normalize(p + float2(0.0001));
     half4 base = content.eval(fragCoord - normal * (edgeMask * 2.6));
 
-    float topDome = clamp(1.0 - uv.y * 1.75, 0.0, 1.0) * (uIsDark > 0.5 ? 0.08 : 0.16);
+    float topDome = clamp(1.0 - uv.y * 1.75, 0.0, 1.0) * (uIsDark > 0.5 ? 0.08 : 0.045);
     float sheenPos = fract(uTime * 0.14);
     float diag = uv.x * 0.72 + uv.y * 0.28;
     float delta = (diag - sheenPos * 1.4 + 0.2) * 5.0;
-    float sheen = exp(-(delta * delta)) * (uIsDark > 0.5 ? 0.09 : 0.20);
+    float sheen = exp(-(delta * delta)) * (uIsDark > 0.5 ? 0.09 : 0.065);
 
-    float rimGlow = edgeMask * (uIsDark > 0.5 ? 0.22 : 0.30);
-    half3 prism = mix(half3(1.0), uAccent.rgb, 0.42 + 0.34 * sin(uv.x * 3.8 + uTime));
+    float rimGlow = edgeMask * (uIsDark > 0.5 ? 0.22 : 0.11);
+    half3 prismBase = uIsDark > 0.5 ? half3(1.0) : mix(half3(0.88), uAccent.rgb, 0.35);
+    half3 prism = mix(prismBase, uAccent.rgb, 0.42 + 0.34 * sin(uv.x * 3.8 + uTime));
 
     half3 rgb = base.rgb + prism * (rimGlow + sheen) + half3(topDome);
     return half4(clamp(rgb, half3(0.0), half3(1.0)), base.a);
@@ -437,8 +438,8 @@ fun IphoneLiquidGlassPill(
     } else {
         Brush.verticalGradient(
             colors = listOf(
-                Color.White.copy(alpha = if (accentGlow) 0.95f else 0.91f),
-                Color(0xFFEAF1FF).copy(alpha = if (accentGlow) 0.91f else 0.87f)
+                Color(0xFFE1EAF7).copy(alpha = if (accentGlow) 0.88f else 0.84f),
+                Color(0xFFCBD8EE).copy(alpha = if (accentGlow) 0.84f else 0.79f)
             )
         )
     }
@@ -447,7 +448,7 @@ fun IphoneLiquidGlassPill(
         Brush.linearGradient(
             colors = listOf(
                 glass.accentStart.copy(alpha = 0.44f + 0.14f * rimShift),
-                Color.White.copy(alpha = if (glass.isDark) 0.24f else 0.76f),
+                Color.White.copy(alpha = if (glass.isDark) 0.24f else 0.44f),
                 glass.accentEnd.copy(alpha = 0.42f - 0.10f * rimShift)
             ),
             start = Offset(0f, 0f),
@@ -464,9 +465,9 @@ fun IphoneLiquidGlassPill(
     } else {
         Brush.linearGradient(
             colors = listOf(
-                Color.White.copy(alpha = 0.90f),
-                Color(0xFF93C5FD).copy(alpha = 0.36f),
-                Color(0xFF818CF8).copy(alpha = 0.28f)
+                Color(0xFFEAF0FC).copy(alpha = 0.64f),
+                Color(0xFF60A5FA).copy(alpha = 0.38f),
+                Color(0xFF6366F1).copy(alpha = 0.34f)
             )
         )
     }
@@ -528,8 +529,8 @@ fun IphoneLiquidGlassPill(
                             brush = Brush.horizontalGradient(
                                 colors = listOf(
                                     Color.Transparent,
-                                    Color.White.copy(alpha = if (glass.isDark) 0.06f else 0.18f),
-                                    glass.accentStart.copy(alpha = if (glass.isDark) 0.05f else 0.07f),
+                                    Color.White.copy(alpha = if (glass.isDark) 0.06f else 0.07f),
+                                    glass.accentStart.copy(alpha = if (glass.isDark) 0.05f else 0.05f),
                                     Color.Transparent
                                 ),
                                 startX = cx - w * 0.28f,
@@ -540,7 +541,7 @@ fun IphoneLiquidGlassPill(
                     drawRoundRect(
                         brush = Brush.verticalGradient(
                             colors = listOf(
-                                Color.White.copy(alpha = if (glass.isDark) 0.16f else 0.52f),
+                                Color.White.copy(alpha = if (glass.isDark) 0.16f else 0.22f),
                                 Color.Transparent,
                                 glass.accentStart.copy(alpha = if (glass.isDark) 0.14f else 0.16f)
                             )
@@ -629,8 +630,8 @@ fun LiquidGlassSegmentedTabs(
                             .background(
                                 Brush.horizontalGradient(
                                     listOf(
-                                        glass.accentStart.copy(alpha = if (glass.isDark) 0.34f else 0.24f),
-                                        glass.accentEnd.copy(alpha = if (glass.isDark) 0.28f else 0.18f)
+                                        glass.accentStart.copy(alpha = if (glass.isDark) 0.34f else 0.28f),
+                                        glass.accentEnd.copy(alpha = if (glass.isDark) 0.28f else 0.22f)
                                     )
                                 )
                             )
@@ -638,7 +639,7 @@ fun LiquidGlassSegmentedTabs(
                                 width = 0.9.dp,
                                 brush = Brush.verticalGradient(
                                     listOf(
-                                        Color.White.copy(alpha = if (glass.isDark) 0.38f else 0.85f),
+                                        Color.White.copy(alpha = if (glass.isDark) 0.38f else 0.50f),
                                         glass.accentStart.copy(alpha = 0.45f)
                                     )
                                 ),
@@ -1183,7 +1184,7 @@ fun LiquidGlassFloatingToast(
                             brush = Brush.horizontalGradient(
                                 colors = listOf(
                                     Color.Transparent,
-                                    Color.White.copy(alpha = if (glass.isDark) 0.08f else 0.22f),
+                                    Color.White.copy(alpha = if (glass.isDark) 0.08f else 0.09f),
                                     glass.accentStart.copy(alpha = 0.08f),
                                     Color.Transparent
                                 ),
