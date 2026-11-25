@@ -143,9 +143,7 @@ fun BrowserMenuOverlay(
 ) {
     BackHandler(onBack = onDismiss)
     val glass = LocalNovaGlassColors.current
-    val sakugaVfx = LocalSakugaVfx.current
     val backdropInteraction = remember { MutableInteractionSource() }
-    var themeRowCenter by remember { mutableStateOf(Offset.Zero) }
     val enterAnim = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         enterAnim.animateTo(
@@ -269,14 +267,11 @@ fun BrowserMenuOverlay(
                     ),
                     selectedId = themeMode.name,
                     onSelect = { selected ->
-                        val nextMode = AppThemeMode.valueOf(selected)
-                        sakugaVfx?.triggerThemeSplash(themeRowCenter)
-                        onUpdateTheme(nextMode)
+                        onUpdateTheme(AppThemeMode.valueOf(selected))
                     },
                     accentGlow = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onGloballyPositioned { themeRowCenter = it.boundsInRoot().center }
+                    useThemeSplash = true,
+                    modifier = Modifier.fillMaxWidth()
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))

@@ -73,6 +73,7 @@ import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -583,7 +584,8 @@ fun LiquidGlassSegmentedTabs(
     selectedId: String,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
-    accentGlow: Boolean = false
+    accentGlow: Boolean = false,
+    useThemeSplash: Boolean = false
 ) {
     val glass = LocalNovaGlassColors.current
     val haptic = LocalHapticFeedback.current
@@ -659,67 +661,73 @@ fun LiquidGlassSegmentedTabs(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 tabs.forEach { tab ->
-                    val isSelected = tab.id == selectedId
-                    var itemCenterInRoot by remember { mutableStateOf(Offset.Zero) }
-                    val interactionSource = remember { MutableInteractionSource() }
-                    val isPressed by interactionSource.collectIsPressedAsState()
-                    val pressY by animateFloatAsState(
-                        targetValue = if (isPressed) 0.90f else 1f,
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioLowBouncy,
-                            stiffness = Spring.StiffnessMedium
-                        ),
-                        label = "seg_tab_press"
-                    )
-                    val (sqX, sqY) = sakugaSquashScale(pressY, wideFactor = 0.42f)
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center,
-                        modifier = Modifier
-                            .weight(1f)
-                            .then(if (tab.testTagName != null) Modifier.testTag(tab.testTagName) else Modifier)
-                            .onGloballyPositioned { coords ->
-                                val pos = coords.positionInParent()
-                                slotBounds[tab.id] = pos.x to coords.size.width.toFloat()
-                                itemCenterInRoot = coords.boundsInRoot().center
-                            }
-                            .graphicsLayer {
-                                scaleX = sqX
-                                scaleY = sqY
-                            }
-                            .defaultMinSize(minHeight = 40.dp)
-                            .clip(RoundedCornerShape(50))
-                            .clickable(
-                                role = Role.Tab,
-                                interactionSource = interactionSource,
-                                indication = null,
-                                onClick = {
-                                    sakugaVfx?.triggerChipAccent(itemCenterInRoot)
-                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    onSelect(tab.id)
-                                }
-                            )
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                    ) {
-                        if (tab.icon != null) {
-                            Icon(
-                                imageVector = tab.icon,
-                                contentDescription = null,
-                                tint = if (isSelected) glass.accentStart else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                        }
-                        Text(
-                            text = tab.label,
-                            style = MaterialTheme.typography.labelMedium.copy(
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                    key(tab.id) {
+                        val isSelected = tab.id == selectedId
+                        var itemCenterInRoot by remember { mutableStateOf(Offset.Zero) }
+                        val interactionSource = remember { MutableInteractionSource() }
+                        val isPressed by interactionSource.collectIsPressedAsState()
+                        val pressY by animateFloatAsState(
+                            targetValue = if (isPressed) 0.90f else 1f,
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                stiffness = Spring.StiffnessMedium
                             ),
-                            color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            label = "seg_tab_press"
                         )
+                        val (sqX, sqY) = sakugaSquashScale(pressY, wideFactor = 0.42f)
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .then(if (tab.testTagName != null) Modifier.testTag(tab.testTagName) else Modifier)
+                                .onGloballyPositioned { coords ->
+                                    val pos = coords.positionInParent()
+                                    slotBounds[tab.id] = pos.x to coords.size.width.toFloat()
+                                    itemCenterInRoot = coords.boundsInRoot().center
+                                }
+                                .graphicsLayer {
+                                    scaleX = sqX
+                                    scaleY = sqY
+                                }
+                                .defaultMinSize(minHeight = 40.dp)
+                                .clip(RoundedCornerShape(50))
+                                .clickable(
+                                    role = Role.Tab,
+                                    interactionSource = interactionSource,
+                                    indication = ripple(bounded = true, color = glass.accentStart),
+                                    onClick = {
+                                        if (useThemeSplash) {
+                                            sakugaVfx?.triggerThemeSplash(itemCenterInRoot)
+                                        } else {
+                                            sakugaVfx?.triggerChipAccent(itemCenterInRoot)
+                                        }
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        onSelect(tab.id)
+                                    }
+                                )
+                                .padding(horizontal = 10.dp, vertical = 8.dp)
+                        ) {
+                            if (tab.icon != null) {
+                                Icon(
+                                    imageVector = tab.icon,
+                                    contentDescription = null,
+                                    tint = if (isSelected) glass.accentStart else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                            }
+                            Text(
+                                text = tab.label,
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                ),
+                                color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             }

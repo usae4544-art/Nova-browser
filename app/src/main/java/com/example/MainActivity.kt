@@ -466,7 +466,13 @@ fun NovaBrowserApp(
                             onDismiss = viewModel::closeOverlay,
                             onUpdateTheme = { mode ->
                                 viewModel.updateThemeMode(mode)
-                                viewModel.emitMessage("Theme: ${mode.label}")
+                                viewModel.emitMessage(
+                                    if (activeTab.isIncognito && mode == com.example.ui.theme.AppThemeMode.LIGHT) {
+                                        "Normal theme: Light (Stealth tabs stay Dark)"
+                                    } else {
+                                        "Theme: ${mode.label}"
+                                    }
+                                )
                             },
                             onToggleAutoDarkWebsites = {
                                 val next = !settings.autoDarkWebsites
@@ -624,7 +630,13 @@ fun NovaBrowserApp(
                             siteNotificationRules = siteNotificationRules,
                             onUpdateTheme = { mode ->
                                 viewModel.updateThemeMode(mode)
-                                viewModel.emitMessage("Theme: ${mode.label}")
+                                viewModel.emitMessage(
+                                    if (activeTab.isIncognito && mode == com.example.ui.theme.AppThemeMode.LIGHT) {
+                                        "Normal theme: Light (Stealth tabs stay Dark)"
+                                    } else {
+                                        "Theme: ${mode.label}"
+                                    }
+                                )
                             },
                             onUpdateSearchEngine = { engine ->
                                 viewModel.updateSearchEngine(engine)
