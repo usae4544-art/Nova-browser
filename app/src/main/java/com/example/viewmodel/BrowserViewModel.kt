@@ -179,13 +179,24 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         initialValue = false
     )
 
-    val activeTab: StateFlow<BrowserTab> = combine(_tabs, _activeTabId) { list, id ->
-        list.firstOrNull { it.id == id } ?: list.firstOrNull() ?: BrowserTab()
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.Eagerly,
-        initialValue = initialTab
-    )
+    private val tabStateLock = Any()
+    private val _activeTab = MutableStateFlow(initialTab)
+    val activeTab: StateFlow<BrowserTab> = _activeTab.asStateFlow()
+
+    private fun setTabsAndActive(
+        newTabs: List<BrowserTab>? = null,
+        newActiveId: String? = null
+    ) {
+        synchronized(tabStateLock) {
+            val resolvedTabs = newTabs ?: _tabs.value
+            val resolvedActiveId = newActiveId ?: _activeTabId.value
+            _tabs.value = resolvedTabs
+            _activeTabId.value = resolvedActiveId
+            _activeTab.value = resolvedTabs.firstOrNull { it.id == resolvedActiveId }
+                ?: resolvedTabs.firstOrNull()
+                ?: BrowserTab()
+        }
+    }
 
     private val _activeOverlay = MutableStateFlow<BrowserOverlay>(BrowserOverlay.None)
     val activeOverlay: StateFlow<BrowserOverlay> = _activeOverlay.asStateFlow()
@@ -667,7 +678,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             val parentId = tab.parentTabId
             if (parentId != null && _tabs.value.any { it.id == parentId }) {
                 closeTab(tab.id)
-                _activeTabId.value = parentId
+                setTabsAndActive(newActiveId = parentId)
                 return true
             }
 
@@ -682,7 +693,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val previousTabId = cleanedHistory.lastOrNull()
         if (previousTabId != null) {
             _tabVisitHistory.value = cleanedHistory.dropLast(1)
-            _activeTabId.value = previousTabId
+            setTabsAndActive(newActiveId = previousTabId)
             return true
         }
 
@@ -791,8 +802,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             webViewManager.primeTabUrl(newTab.id, resolved)
         }
         _tabVisitHistory.update { (it.filterNot { id -> id == previousId } + previousId).takeLast(12) }
-        _tabs.update { it + newTab }
-        _activeTabId.value = newTab.id
+        setTabsAndActive(newTabs = _tabs.value + newTab, newActiveId = newTab.id)
         _activeOverlay.value = BrowserOverlay.None
         _findInPage.value = FindInPageState()
         _barsHiddenByScroll.value = false
@@ -814,7 +824,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         if (previousId != tabId) {
             _tabVisitHistory.update { (it.filterNot { id -> id == previousId } + previousId).takeLast(12) }
         }
-        _activeTabId.value = tabId
+        setTabsAndActive(newActiveId = tabId)
         _isIncognitoVaultLocked.value = false
         _activeOverlay.value = BrowserOverlay.None
         _findInPage.value = FindInPageState()
@@ -832,17 +842,18 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val remaining = currentList.filterNot { it.id == tabId }
         if (remaining.isEmpty()) {
             val fresh = BrowserTab()
-            _tabs.value = listOf(fresh)
-            _activeTabId.value = fresh.id
+            setTabsAndActive(newTabs = listOf(fresh), newActiveId = fresh.id)
             _incognitoUnlocked.value = false
         } else {
-            _tabs.value = remaining
-            if (_activeTabId.value == tabId) {
+            val nextActiveId = if (_activeTabId.value == tabId) {
                 val remainingIds = remaining.map { it.id }.toSet()
                 val recentTabId = _tabVisitHistory.value.lastOrNull { it in remainingIds }
                 val nextIndex = (index - 1).coerceAtLeast(0).coerceAtMost(remaining.lastIndex)
-                _activeTabId.value = recentTabId ?: remaining[nextIndex].id
+                recentTabId ?: remaining[nextIndex].id
+            } else {
+                _activeTabId.value
             }
+            setTabsAndActive(newTabs = remaining, newActiveId = nextActiveId)
             if (remaining.none { it.isIncognito }) {
                 _incognitoUnlocked.value = false
             }
@@ -864,13 +875,14 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         }
         if (remaining.isEmpty()) {
             val fresh = BrowserTab()
-            _tabs.value = listOf(fresh)
-            _activeTabId.value = fresh.id
+            setTabsAndActive(newTabs = listOf(fresh), newActiveId = fresh.id)
         } else {
-            _tabs.value = remaining
-            if (remaining.none { it.id == _activeTabId.value }) {
-                _activeTabId.value = remaining.first().id
+            val nextActiveId = if (remaining.none { it.id == _activeTabId.value }) {
+                remaining.first().id
+            } else {
+                _activeTabId.value
             }
+            setTabsAndActive(newTabs = remaining, newActiveId = nextActiveId)
         }
     }
 
@@ -1257,7 +1269,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         _isIncognitoVaultLocked.value = false
         _incognitoPinChallenge.value = null
         if (normal != null) {
-            _activeTabId.value = normal.id
+            setTabsAndActive(newActiveId = normal.id)
         } else {
             openNewTab(isIncognito = false)
         }
@@ -1533,8 +1545,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     fun setVpnGatewayAddress(address: String) = viewModelScope.launch { repository.setVpnGatewayAddress(address) }
 
     private fun updateTab(tabId: String, transform: (BrowserTab) -> BrowserTab) {
-        _tabs.update { list ->
-            list.map { if (it.id == tabId) transform(it) else it }
+        synchronized(tabStateLock) {
+            val updated = _tabs.value.map { if (it.id == tabId) transform(it) else it }
+            setTabsAndActive(newTabs = updated)
         }
     }
 
